@@ -1,7 +1,7 @@
 #pragma once
 #include <mathlib/vmatrix.h>
-#include <KeyValues.h>
-#include <appframework/IAppSystem.h>
+#include <keyvalues.h>
+#include <appframework/iappsystem.h>
 
 struct TEyeCalibration
 {
