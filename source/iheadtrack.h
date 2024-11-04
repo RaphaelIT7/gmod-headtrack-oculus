@@ -148,7 +148,6 @@ public:
 };
 
 class THeadTrackResults;
-class TEyeCalibration;
 class TWorldFiducial;
 struct THeadTrackParms;
 class IHeadTrack
