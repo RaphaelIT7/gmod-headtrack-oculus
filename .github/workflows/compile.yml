@@ -1,0 +1,19 @@
+name: Build Project
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'source/**'
+      - 'premake5.lua'
+
+jobs:
+  build:
+    uses: RaphaelIT7/gmod-common-module-base/.github/workflows/compile.yml@workflow
+    with:
+      PROJECT_NAME: "headtrack_oculus"
+      BUILD_64x: "true"
+      LINUX_FILEEXTENTION: "so"
+      BUILD_WINDOWS: "true"
+      ARTIFACT_EXPIRE: "1"
+      USE_PREFIX: "false"
