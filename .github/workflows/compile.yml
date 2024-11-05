@@ -12,7 +12,7 @@ jobs:
     uses: RaphaelIT7/gmod-common-module-base/.github/workflows/compile.yml@workflow
     with:
       PROJECT_NAME: "headtrack_oculus"
-      BUILD_64x: "true"
+      BUILD_64x: "false"
       LINUX_FILEEXTENTION: "so"
       BUILD_WINDOWS: "true"
       ARTIFACT_EXPIRE: "1"
