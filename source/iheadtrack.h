@@ -150,15 +150,16 @@ public:
 class THeadTrackResults;
 class TWorldFiducial;
 struct THeadTrackParms;
-class IHeadTrack
+class IHeadTrack : public IAppSystem
 {
 public:
-	virtual bool Connect(CreateInterfaceFn* fn) = 0;
+	virtual bool Connect(CreateInterfaceFn fn) = 0;
 	virtual void Disconnect() = 0;
 	virtual void* QueryInterface(const char*) = 0;
 	virtual InitReturnVal_t Init() = 0;
 	virtual void Shutdown() = 0;
-	virtual ~IHeadTrack() {}; // Just compile :(
+
+	virtual ~IHeadTrack() {};
 	virtual const char* GetDisplayName() = 0;
 	virtual void GetWindowBounds(int*, int*, int*, int*, int*, int*) = 0;
 	virtual IHeadTrack* CreateInstance() = 0;
@@ -183,7 +184,7 @@ public:
 	virtual void SetCurrentStereoEye(StereoEye_t) = 0;
 	virtual void DoDistortionProcessing(const vrect_t*) = 0;
 	virtual void AlignTorsoAndViewToWeapon() = 0;
-	//virtual void OverrideViewModelTransform(Vector&, QAngle&, bool) = 0;
+	//virtual void OverrideViewModelTransform(Vector&, QAngle&, bool) = 0; // NOTE: Some function here doesn't exist on windows... idk which one it is but removing this one fixes the vtable offsets for now.
 	virtual bool ShouldRenderHUDInWorld() = 0;
 	virtual float GetHUDDistance() = 0;
 	virtual bool ShouldRenderStereoHUD() = 0;

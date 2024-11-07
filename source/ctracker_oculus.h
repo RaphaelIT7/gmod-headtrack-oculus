@@ -1,12 +1,13 @@
 #pragma once
 
 #include "itracker.h"
+#include <openvr.h>
 
 class CTracker_Oculus : public ITracker
 {
 public:
-	virtual void BPreInit();
-	virtual void BInit();
+	virtual bool BPreInit();
+	virtual bool BInit();
 	virtual void BPostInit();
 	virtual void Shutdown();
 	virtual const char* GetDisplayName();
@@ -24,4 +25,10 @@ public:
 	virtual const char* GetModelNumber();
 
 	virtual ~CTracker_Oculus();
+
+	vr::IVRSystem* GetHmd() { return m_pHmd; };
+private:
+	vr::IVRSystem* m_pHmd;
 };
+
+extern CTracker_Oculus* g_pOculusTracker;

@@ -9,8 +9,8 @@ class TWorldFiducial;
 class ITracker
 {
 public:
-	virtual void BPreInit() = 0;
-	virtual void BInit() = 0;
+	virtual bool BPreInit() = 0;
+	virtual bool BInit() = 0;
 	virtual void BPostInit() = 0;
 	virtual void Shutdown() = 0;
 	virtual const char* GetDisplayName() = 0;
