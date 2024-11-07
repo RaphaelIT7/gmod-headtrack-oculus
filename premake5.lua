@@ -48,10 +48,14 @@ CreateWorkspace({name = "headtrack_oculus", abi_compatible = false})
 		targetsuffix("")
 		filter("system:windows")
 			files({"source/win32/*.cpp", "source/win32/*.hpp"})
+			libdirs("openvr-2.5.1/lib/win32/")
+			links("openvr_api.lib")
 
 		filter("system:linux or macosx")
 			files({"source/posix/*.cpp", "source/posix/*.hpp"})
+			libdirs("openvr-2.5.1/lib/linux32/")
 			targetextension(".so")
 			links({
-				"dl"
+				"dl",
+				"openvr_api"
 			})
