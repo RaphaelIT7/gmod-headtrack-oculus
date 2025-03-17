@@ -147,6 +147,8 @@ public:
 	VMatrix	 m_ViewToProjection;
 };
 
+#define HEADTRACK_INTERFACE_VERSION "VHeadTrack001"
+
 class THeadTrackResults;
 class TWorldFiducial;
 struct THeadTrackParms;
@@ -161,41 +163,41 @@ public:
 
 	virtual ~IHeadTrack() {};
 	virtual const char* GetDisplayName() = 0;
-	virtual void GetWindowBounds(int*, int*, int*, int*, int*, int*) = 0;
+	virtual void GetWindowBounds(int* windowWidth, int* windowHeight, int* pnX, int* pnY, int* renderWidth, int* renderHeight) = 0;
 	virtual IHeadTrack* CreateInstance() = 0;
 	virtual void ResetTracking() = 0;
 	virtual void SetCurrentCameraAsZero() = 0;
-	virtual void GetCameraFromWorldPose(VMatrix*, VMatrix*, double*) = 0;
-	virtual void GetCameraPoseZeroFromCurrent(VMatrix*) = 0;
+	virtual void GetCameraFromWorldPose(VMatrix* pResultCameraFromWorldPose, VMatrix* pResultCameraFromWorldPoseUnpredicted = NULL, double* pflAcquireTime = NULL) = 0;
+	virtual void GetCameraPoseZeroFromCurrent(VMatrix* pResultMatrix) = 0;
 	virtual void GetCurrentEyeTransforms(THeadTrackResults&, THeadTrackParms&) = 0;
 	virtual void GetWorldFiducials(TWorldFiducial*, uint) = 0;
-	virtual void ProcessCurrentTrackingState(float) = 0;
-	virtual void OverrideView(CViewSetup*, Vector*, QAngle*, HeadtrackMovementMode_t) = 0;
-	virtual void OverrideStereoView(CViewSetup*, CViewSetup*, CViewSetup*) = 0;
-	virtual void OverridePlayerMotion(float, const QAngle&, const QAngle&, const Vector&, QAngle*, Vector*) = 0;
-	virtual void OverrideWeaponHudAimVectors(Vector*, Vector*) = 0;
+	virtual void ProcessCurrentTrackingState(float PlayerGameFov) = 0;
+	virtual void OverrideView(CViewSetup* pViewMiddle, Vector* pViewModelOrigin, QAngle* pViewModelAngles, HeadtrackMovementMode_t hmmMovementOverride) = 0;
+	virtual void OverrideStereoView(CViewSetup* pViewMiddle, CViewSetup* pViewLeft, CViewSetup* pViewRight) = 0;
+	virtual void OverridePlayerMotion(float flInputSampleFrametime, const QAngle& oldAngles, const QAngle& curAngles, const Vector& curMotion, QAngle* pNewAngles, Vector* pNewMotion) = 0;
+	virtual void OverrideWeaponHudAimVectors(Vector* pAimOrigin, Vector* pAimDirection) = 0;
 	virtual void OverrideZNearFar(float*, float*) = 0;
-	virtual void OverrideTorsoTransform(const Vector&, const QAngle&) = 0;
+	virtual void OverrideTorsoTransform(const Vector& position, const QAngle& angles) = 0;
 	virtual void CancelTorsoTransformOverride() = 0;
-	virtual void GetTorsoRelativeAim(Vector*, QAngle*) = 0;
-	virtual void GetWorldFromMidEye() = 0;
-	virtual void GetZoomedModeMagnification() = 0;
+	virtual void GetTorsoRelativeAim(Vector* pPosition, QAngle* pAngles) = 0;
+	virtual const VMatrix& GetWorldFromMidEye() = 0;
+	virtual float GetZoomedModeMagnification() = 0;
 	virtual void GetCurrentEyeViewport(int&, int&, int&, int&) = 0;
 	virtual void SetCurrentStereoEye(StereoEye_t) = 0;
-	virtual void DoDistortionProcessing(const vrect_t*) = 0;
+	virtual bool DoDistortionProcessing(const vrect_t* srcRect) = 0;
 	virtual void AlignTorsoAndViewToWeapon() = 0;
-	//virtual void OverrideViewModelTransform(Vector&, QAngle&, bool) = 0; // NOTE: Some function here doesn't exist on windows... idk which one it is but removing this one fixes the vtable offsets for now.
+	//virtual void OverrideViewModelTransform(Vector& vmorigin, QAngle& vmangles, bool bUseLargeOverride) = 0; // NOTE: Some function here doesn't exist on windows... idk which one it is but removing this one fixes the vtable offsets for now.
 	virtual bool ShouldRenderHUDInWorld() = 0;
 	virtual float GetHUDDistance() = 0;
 	virtual bool ShouldRenderStereoHUD() = 0;
 	virtual void RefreshCameraTexture() = 0;
 	virtual bool IsCameraTextureAvailable() = 0;
-	virtual void RenderHUDQuad(bool, bool) = 0;
-	virtual void GetHudProjectionFromWorld() = 0;
-	virtual void CollectSessionStartStats(KeyValues*) = 0;
-	virtual void CollectPeriodicStats(KeyValues*) = 0;
-	virtual void RecalcEyeCalibration(TEyeCalibration*) = 0;
-	virtual void GetCurrentEyeCalibration(TEyeCalibration*) = 0;
-	virtual void SetCurrentEyeCalibration(const TEyeCalibration&) = 0;
-	virtual void SetEyeCalibrationDisplayMisc(int, bool) = 0;
+	virtual void RenderHUDQuad(bool bBlackout, bool bTranslucent) = 0;
+	virtual const VMatrix& GetHudProjectionFromWorld() = 0;
+	virtual bool CollectSessionStartStats(KeyValues* pkvStats) = 0;
+	virtual bool CollectPeriodicStats(KeyValues* pkvStats) = 0;
+	virtual void RecalcEyeCalibration(TEyeCalibration* p) = 0;
+	virtual void GetCurrentEyeCalibration(TEyeCalibration* p) = 0;
+	virtual void SetCurrentEyeCalibration(TEyeCalibration const& p) = 0;
+	virtual void SetEyeCalibrationDisplayMisc(int iEditingNum, bool bVisible) = 0;
 };

@@ -2,6 +2,12 @@
 #include <convar.h>
 #include <ctracker_oculus.h>
 #include <openvr_capi.h>
+#include <time.h>
+#include "materialsystem/imesh.h"
+#include "ienginevgui.h"
+#include "vgui/ISurface.h"
+#include "c_baseplayer.h"
+#include "c_baseviewmodel.h"
 
 CHeadTrack g_HeadTrack;
 
@@ -68,6 +74,79 @@ ConCommand oculus_reset( "oculus_reset", CC_Oculus_Reset, "" );
 ConVar vr_debug_nodistortion ( "vr_debug_nodistortion", "0" );
 ConVar vr_debug_nochromatic ( "vr_debug_nochromatic", "0" );
 
+// --------------------------------------------------------------------
+// A huge pile of VR convars
+// --------------------------------------------------------------------
+ConVar vr_moveaim_mode      ( "vr_moveaim_mode",      "3", FCVAR_ARCHIVE, "0=move+shoot from face. 1=move with torso. 2,3,4=shoot with face+mouse cursor. 5+ are probably not that useful." );
+ConVar vr_moveaim_mode_zoom ( "vr_moveaim_mode_zoom", "3", FCVAR_ARCHIVE, "0=move+shoot from face. 1=move with torso. 2,3,4=shoot with face+mouse cursor. 5+ are probably not that useful." );
+
+ConVar vr_moveaim_reticle_yaw_limit        ( "vr_moveaim_reticle_yaw_limit",        "10", FCVAR_ARCHIVE, "Beyond this number of degrees, the mouse drags the torso" );
+ConVar vr_moveaim_reticle_pitch_limit      ( "vr_moveaim_reticle_pitch_limit",      "30", FCVAR_ARCHIVE, "Beyond this number of degrees, the mouse clamps" );
+// Note these are scaled by the zoom factor.
+ConVar vr_moveaim_reticle_yaw_limit_zoom   ( "vr_moveaim_reticle_yaw_limit_zoom",   "0", FCVAR_ARCHIVE, "Beyond this number of degrees, the mouse drags the torso" );
+ConVar vr_moveaim_reticle_pitch_limit_zoom ( "vr_moveaim_reticle_pitch_limit_zoom", "-1", FCVAR_ARCHIVE, "Beyond this number of degrees, the mouse clamps" );
+
+// This are somewhat obsolete.
+ConVar vr_aim_yaw_offset( "vr_aim_yaw_offset", "90", 0, "This value is added to Yaw when returning the vehicle aim angles to Source." );
+
+ConVar vr_stereo_swap_eyes ( "vr_stereo_swap_eyes", "0", 0, "1=swap eyes." );
+
+// Useful for debugging wacky-projection problems, separate from multi-rendering problems.
+ConVar vr_stereo_mono_set_eye ( "vr_stereo_mono_set_eye", "0", 0, "0=off, Set all eyes to 1=left, 2=right, 3=middle eye" );
+
+// Useful for examining anims, etc.
+ConVar vr_debug_remote_cam( "vr_debug_remote_cam", "0" );
+ConVar vr_debug_remote_cam_pos_x( "vr_debug_remote_cam_pos_x", "150.0" );
+ConVar vr_debug_remote_cam_pos_y( "vr_debug_remote_cam_pos_y", "0.0" );
+ConVar vr_debug_remote_cam_pos_z( "vr_debug_remote_cam_pos_z", "0.0" );
+ConVar vr_debug_remote_cam_target_x( "vr_debug_remote_cam_target_x", "0.0" );
+ConVar vr_debug_remote_cam_target_y( "vr_debug_remote_cam_target_y", "0.0" );
+ConVar vr_debug_remote_cam_target_z( "vr_debug_remote_cam_target_z", "-50.0" );
+
+ConVar vr_translation_limit( "vr_translation_limit", "10.0", 0, "How far the in-game head will translate before being clamped." );
+
+ConVar vr_dont_use_calibration_projection ( "vr_dont_use_calibration_projection", "0", 0, "1=use calibrated rotation, but not projection" );
+
+// HUD config values
+ConVar vr_render_hud_in_world( "vr_render_hud_in_world", "1" );
+ConVar vr_hud_max_fov( "vr_hud_max_fov", "70", FCVAR_ARCHIVE, "Max FOV of the Menus" );
+ConVar vr_hud_forward( "vr_hud_forward", "500", FCVAR_ARCHIVE, "Apparent distance of the HUD in inches" );
+ConVar vr_hud_display_ratio( "vr_hud_display_ratio", "0.95", FCVAR_ARCHIVE );
+
+ConVar vr_hud_axis_lock_to_world( "vr_hud_axis_lock_to_world", "0", FCVAR_ARCHIVE, "Bitfield - locks HUD axes to the world - 0=pitch, 1=yaw, 2=roll" );
+
+// Default distance clips through rocketlauncher, heavy's body, etc.
+ConVar vr_projection_znear_multiplier( "vr_projection_znear_multiplier", "0.3", 0, "Allows moving the ZNear plane to deal with body clipping" );
+
+ConVar vr_stat_sample_period ( "vr_stat_sample_period", "1", 0, "Frequency with which to sample motion stats" );
+
+// Should the viewmodel (weapon) translate with the HMD, or remain fixed to the in-world body (but still rotate with the head)? Purely a graphics effect - no effect on actual bullet aiming.
+// Has no effect in aim modes where aiming is not controlled by the head.
+ConVar vr_viewmodel_translate_with_head ( "vr_viewmodel_translate_with_head", "0", 0, "1=translate the viewmodel with the head motion." );
+
+ConVar vr_zoom_multiplier ( "vr_zoom_multiplier", "2.0", FCVAR_ARCHIVE, "When zoomed, how big is the scope on your HUD?" );
+ConVar vr_zoom_scope_scale ( "vr_zoom_scope_scale", "6.0", 0, "Something to do with the default scope HUD overlay size." );		// Horrible hack - should work out the math properly, but we need to ship.
+
+
+ConVar vr_viewmodel_offset_forward( "vr_viewmodel_offset_forward", "-8", 0 );
+ConVar vr_viewmodel_offset_forward_large( "vr_viewmodel_offset_forward_large", "-15", 0 );
+
+ConVar vr_ipdtest_left_t ( "vr_ipdtest_left_t", "260", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_left_b ( "vr_ipdtest_left_b", "530", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_left_i ( "vr_ipdtest_left_i", "550", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_left_o ( "vr_ipdtest_left_o", "200", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_right_t ( "vr_ipdtest_right_t", "260", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_right_b ( "vr_ipdtest_right_b", "530", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_right_i ( "vr_ipdtest_right_i", "550", FCVAR_ARCHIVE );
+ConVar vr_ipdtest_right_o ( "vr_ipdtest_right_o", "200", FCVAR_ARCHIVE );
+
+ConVar vr_vehicle_aim_mode( "vr_vehicle_aim_mode", "0", FCVAR_ARCHIVE, "Specifies how to aim vehicle weapon ( tracked weapon = 0, view = 1 )" );
+
+static bool IsMenuUp( )
+{
+	return ((enginevgui && enginevgui->IsGameUIVisible())  || vgui::surface()->IsCursorVisible() );
+}
+
 CHeadTrack::CHeadTrack()
 {
 }
@@ -78,6 +157,7 @@ CHeadTrack::~CHeadTrack() {
 
 bool CHeadTrack::Connect(CreateInterfaceFn factory) {
 	DebugMsg("CHeadTrack::Connect\n");
+
 	if (!factory)
 		return false;
 
@@ -95,11 +175,13 @@ bool CHeadTrack::Connect(CreateInterfaceFn factory) {
 
 void CHeadTrack::Disconnect() {
 	DebugMsg("CHeadTrack::Disconnect\n");
+
 	BaseClass::Disconnect();
 }
 
 void* CHeadTrack::QueryInterface(const char* pInterfaceName) {
 	DebugMsg("CHeadTrack::QueryInterface %s\n", pInterfaceName);
+
 	return Sys_GetFactoryThis()(pInterfaceName, NULL);	
 }
 
@@ -125,11 +207,13 @@ void CHeadTrack::Shutdown() {
 
 const char* CHeadTrack::GetDisplayName() {
 	DebugMsg("CHeadTrack::GetDisplayName\n");
+
 	return NULL;
 }
 
 void CHeadTrack::GetWindowBounds(int* windowWidth, int* windowHeight, int* pnX, int* pnY, int* renderWidth, int* renderHeight) {
 	DebugMsg("CHeadTrack::GetWindowBounds\n");
+
 	*windowWidth = 1920;
 	*windowHeight = 1080;
 	*pnX = 1;
@@ -140,6 +224,7 @@ void CHeadTrack::GetWindowBounds(int* windowWidth, int* windowHeight, int* pnX, 
 
 IHeadTrack* CHeadTrack::CreateInstance() {
 	DebugMsg("CHeadTrack::CreateInstance\n");
+
 	return &g_HeadTrack; // normally returns new CHeadTrack();
 }
 
@@ -197,6 +282,8 @@ void CHeadTrack::OverrideTorsoTransform(const Vector&, const QAngle&) {
 
 void CHeadTrack::CancelTorsoTransformOverride() {
 	DebugMsg("CHeadTrack::CancelTorsoTransformOverride\n");
+
+	m_bOverrideTorsoAngle = false;
 }
 
 void CHeadTrack::GetTorsoRelativeAim(Vector*, QAngle*) {
@@ -313,39 +400,412 @@ void CHeadTrack::RefreshCameraTexture() {
 
 bool CHeadTrack::IsCameraTextureAvailable() {
 	DebugMsg("CHeadTrack::IsCameraTextureAvailable\n");
-	return false;
+	return false; // Always return's false? "xor eax, eax"
 }
 
-void CHeadTrack::RenderHUDQuad(bool, bool) {
+// --------------------------------------------------------------------
+// Purpose: Returns the bounds in world space where the game should 
+//			position the HUD.
+// --------------------------------------------------------------------
+void CHeadTrack::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *pUR, Vector *pLL, Vector *pLR )
+{
+	Vector vHalfWidth = m_WorldFromHud.GetLeft() * -m_fHudHalfWidth;
+	Vector vHalfHeight = m_WorldFromHud.GetUp() * m_fHudHalfHeight;
+	
+	QAngle vmAngles;
+	Vector vmOrigin, hudRight, hudForward, hudUp, vHUDOrigin;
+
+	if ( IsMenuUp() )
+	{
+		vHUDOrigin = m_PlayerViewOrigin + m_WorldFromHud.GetForward() * vr_hud_forward.GetFloat();
+	}
+	else
+	{
+		
+		CBasePlayer* pPlayer = C_BasePlayer::GetLocalPlayer();
+		if ( pPlayer != NULL )
+		{
+			C_BaseCombatWeapon *pWeapon = pPlayer->GetActiveWeapon();
+			if ( pWeapon )
+			{
+				C_BaseViewModel *vm = pPlayer->GetViewModel(0);
+				if ( vm )
+				{
+					int iAttachment = vm->LookupAttachment( "hud_left" );
+					vm->GetAttachment( iAttachment, vmOrigin, vmAngles);
+					
+					VMatrix worldFromPanel;
+					AngleMatrix(vmAngles, worldFromPanel.As3x4());
+					MatrixRotate(worldFromPanel, Vector(1, 0, 0), -90.f);
+					worldFromPanel.GetBasisVectors(hudForward, hudRight, hudUp);
+					
+					static const float aspectRatio = 4.f/3.f;
+					float width = 24; // vr_hud_width.GetFloat();
+					float height = width / aspectRatio;
+						
+					vHalfWidth = hudRight * width/2.f; 
+					vHalfHeight = hudUp  *  height/2.f; 
+				}
+			}
+		}		
+		
+		vHUDOrigin = vmOrigin + hudRight*-5 + hudForward + hudUp*-1 + vHalfWidth; 
+	}
+
+	*pViewer = m_PlayerViewOrigin;
+	*pUL = vHUDOrigin - vHalfWidth + vHalfHeight;
+	*pUR = vHUDOrigin + vHalfWidth + vHalfHeight;
+	*pLL = vHUDOrigin - vHalfWidth - vHalfHeight;
+	*pLR = vHUDOrigin + vHalfWidth - vHalfHeight;
+}
+
+// --------------------------------------------------------------------
+// Purpose: Renders the HUD in the world.
+// --------------------------------------------------------------------
+void CHeadTrack::RenderHUDQuad(bool bBlackout, bool bTranslucent) {
 	DebugMsg("CHeadTrack::RenderHUDQuad\n");
+
+		Vector vHead, vUL, vUR, vLL, vLR;
+	GetHUDBounds( &vHead, &vUL, &vUR, &vLL, &vLR );
+
+	CMatRenderContextPtr pRenderContext( materials );
+
+	{
+		IMaterial *mymat = NULL;
+		if ( bTranslucent )
+		{
+			mymat = materials->FindMaterial( "vgui/inworldui", TEXTURE_GROUP_VGUI );
+
+			// this is mounted on the left side of the gun in game, so allow the alpha to be modulated for nice fade in effect...
+			VMatrix mWeap(m_WorldFromWeapon);
+			g_MotionTracker()->overrideWeaponMatrix(mWeap);
+			float alpha = g_MotionTracker()->getHudPanelAlpha(mWeap.GetLeft(), m_WorldFromMidEye.GetForward(), 2.5);
+			mymat->AlphaModulate(alpha);
+		}
+		else
+		{
+			mymat = materials->FindMaterial( "vgui/inworldui_opaque", TEXTURE_GROUP_VGUI );
+		}
+		Assert( !mymat->IsErrorMaterial() );
+			
+
+		IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, mymat );
+
+		CMeshBuilder meshBuilder;
+		meshBuilder.Begin( pMesh, MATERIAL_TRIANGLE_STRIP, 2 );
+
+		meshBuilder.Position3fv (vLR.Base() );
+		meshBuilder.TexCoord2f( 0, 1, 1 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+
+		meshBuilder.Position3fv (vLL.Base());
+		meshBuilder.TexCoord2f( 0, 0, 1 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+
+		meshBuilder.Position3fv (vUR.Base());
+		meshBuilder.TexCoord2f( 0, 1, 0 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+
+		meshBuilder.Position3fv (vUL.Base());
+		meshBuilder.TexCoord2f( 0, 0, 0 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+
+		meshBuilder.End();
+
+		pMesh->Draw();
+		
+	}
+
+	if( bBlackout )
+	{
+		Vector vbUL, vbUR, vbLL, vbLR;
+		// "Reflect" the HUD bounds through the viewer to find the ones behind the head.
+		vbUL = 2 * vHead - vLR;
+		vbUR = 2 * vHead - vLL;
+		vbLL = 2 * vHead - vUR;
+		vbLR = 2 * vHead - vUL;
+
+		IMaterial *mymat = materials->FindMaterial( "vgui/black", TEXTURE_GROUP_VGUI );
+		IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, mymat );
+
+		// Tube around the outside.
+		CMeshBuilder meshBuilder;
+		meshBuilder.Begin( pMesh, MATERIAL_TRIANGLE_STRIP, 8 );
+
+		meshBuilder.Position3fv (vLR.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbLR.Base() );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vLL.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbLL.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vUL.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbUL.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vUR.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbUR.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vLR.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbLR.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.End();
+		pMesh->Draw();
+
+		// Cap behind the viewer.
+		meshBuilder.Begin( pMesh, MATERIAL_TRIANGLE_STRIP, 2 );
+
+		meshBuilder.Position3fv (vbUR.Base() );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbUL.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbLR.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.Position3fv (vbLL.Base());
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 0>();
+
+		meshBuilder.End();
+		pMesh->Draw();
+	}
 }
 
-void CHeadTrack::GetHudProjectionFromWorld() {
+// --------------------------------------------------------------------
+// Purpose: Returns the projection matrix to use for the HUD
+// --------------------------------------------------------------------
+const VMatrix& CHeadTrack::GetHudProjectionFromWorld() {
 	DebugMsg("CHeadTrack::GetHudProjectionFromWorld\n");
+	// This matrix will transform a world-space position into a homogenous HUD-space vector.
+	// So if you divide x+y by w, you will get the position on the HUD in [-1,1] space.
+	return m_HudProjectionFromWorld;
 }
 
-void CHeadTrack::CollectSessionStartStats(KeyValues*) {
+bool CHeadTrack::CollectSessionStartStats(KeyValues* pkvStats) {
 	DebugMsg("CHeadTrack::CollectSessionStartStats\n");
+
+	pkvStats->SetName( "TF2VRSessionDetails" );
+
+	CUtlString sSerialNumber = ""; //g_pSourceVR->GetDisplaySerialNumber();
+	if( sSerialNumber.Length() > 0 && !sSerialNumber.IsEmpty() )
+	{
+		pkvStats->SetString( "SerialNumber", sSerialNumber.Get() );
+	}
+	CUtlString sModelNumber = ""; //g_pSourceVR->GetDisplayModelNumber();
+	if( sModelNumber.Length() > 0 && !sModelNumber.IsEmpty() )
+	{
+		pkvStats->SetString( "ModelNumberID", sModelNumber.Get() );
+	}
+
+	pkvStats->SetFloat( "vr_separation_user_inches", /*g_pSourceVR->GetUserIPDMM() /*/ 25.4f );
+	//pkvStats->SetFloat( "vr_separation_toein_pixels", vr_separation_toein_pixels.GetFloat() );
+	//pkvStats->SetInt( "vr_moveaim_mode", vr_moveaim_mode.GetInt() );
+	//pkvStats->SetFloat( "vr_moveaim_reticle_yaw_limit", vr_moveaim_reticle_yaw_limit.GetFloat() );
+	//pkvStats->SetFloat( "vr_moveaim_reticle_pitch_limit", vr_moveaim_reticle_pitch_limit.GetFloat() );
+	//pkvStats->SetInt( "vr_moveaim_mode_zoom", vr_moveaim_mode_zoom.GetInt() );
+	//pkvStats->SetFloat( "vr_moveaim_reticle_yaw_limit_zoom", vr_moveaim_reticle_yaw_limit_zoom.GetFloat() );
+	//pkvStats->SetFloat( "vr_moveaim_reticle_pitch_limit_zoom", vr_moveaim_reticle_pitch_limit_zoom.GetFloat() );
+	//pkvStats->SetFloat( "vr_hud_max_fov", vr_hud_max_fov.GetFloat() );
+	//pkvStats->SetFloat( "vr_hud_forward", vr_hud_forward.GetFloat() );
+	//pkvStats->SetFloat( "vr_neckmodel_up", vr_neckmodel_up.GetFloat() );
+	//pkvStats->SetFloat( "vr_neckmodel_forwards", vr_neckmodel_forwards.GetFloat() );
+	//pkvStats->SetInt( "vr_hud_axis_lock_to_world", vr_hud_axis_lock_to_world.GetInt() );
+
+	//pkvStats->SetInt( "vr_ipdtest_left_t", vr_ipdtest_left_t.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_left_b", vr_ipdtest_left_b.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_left_i", vr_ipdtest_left_i.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_left_o", vr_ipdtest_left_o.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_right_t", vr_ipdtest_right_t.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_right_b", vr_ipdtest_right_b.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_right_i", vr_ipdtest_right_i.GetInt() );
+	//pkvStats->SetInt( "vr_ipdtest_right_o", vr_ipdtest_right_o.GetInt() );
+
+	return true;
 }
 
-void CHeadTrack::CollectPeriodicStats(KeyValues*) {
+bool CHeadTrack::CollectPeriodicStats(KeyValues* pkvStats) {
 	DebugMsg("CHeadTrack::CollectPeriodicStats\n");
+
+	// maybe we haven't even been called to get tracking data
+	if( !m_bMotionUpdated )
+		return false;
+
+	m_bMotionUpdated = false;
+
+	uint32 unPeriod = (uint32) vr_stat_sample_period.GetInt();
+	if( unPeriod == 0 )
+		return false; // periodic stats are turned off
+
+	RTime32 rtCurrent = time(NULL);
+	if( rtCurrent == m_rtLastMotionSample && ( rtCurrent - m_rtLastMotionSample ) < unPeriod )
+		return false; // it isn't time to report yet
+
+	pkvStats->SetName( "TF2VRMotionSample" );
+
+	pkvStats->SetInt( "SampleTime", rtCurrent );
+
+	Vector vPos;
+	QAngle viewAngles;
+	MatrixAngles( m_WorldFromMidEye.As3x4(), viewAngles, vPos );
+
+	pkvStats->SetFloat( "LookYaw", viewAngles[YAW] );
+	pkvStats->SetFloat( "LookPitch", viewAngles[PITCH] );
+	pkvStats->SetFloat( "LookRoll", viewAngles[ROLL] );
+	pkvStats->SetFloat( "PositionX", vPos.x );
+	pkvStats->SetFloat( "PositionY", vPos.y );
+	pkvStats->SetFloat( "PositionZ", vPos.z );
+
+	pkvStats->SetFloat( "VelocityX", m_PlayerLastMovement.x );
+	pkvStats->SetFloat( "VelocityY", m_PlayerLastMovement.y );
+	pkvStats->SetFloat( "VelocityZ", m_PlayerLastMovement.z );
+
+	QAngle aimAngles;
+	MatrixAngles( m_WorldFromWeapon.As3x4(), aimAngles );
+
+	pkvStats->SetFloat( "AimYaw", aimAngles[YAW] );
+	pkvStats->SetFloat( "AimPitch", aimAngles[PITCH] );
+
+	m_rtLastMotionSample = rtCurrent;
+
+	return true;
 }
 
-void CHeadTrack::RecalcEyeCalibration(TEyeCalibration*) {
+//-----------------------------------------------------------------------------
+// Calibration UI
+//-----------------------------------------------------------------------------
+
+
+// These control the conversion of IPD from pixels to inches.
+ConVar vr_ipdtest_interp_ipd_start_pixels ( "vr_ipdtest_interp_ipd_start_pixels", "491.0", 0 );
+ConVar vr_ipdtest_interp_ipd_start_inches ( "vr_ipdtest_interp_ipd_start_inches", "2.717", 0 );	// 69mm
+ConVar vr_ipdtest_interp_ipd_end_pixels   ( "vr_ipdtest_interp_ipd_end_pixels",   "602.0", 0 );
+ConVar vr_ipdtest_interp_ipd_end_inches   ( "vr_ipdtest_interp_ipd_end_inches",   "2.205", 0 );	// 56mm
+
+// These numbers need to be filled in from physical tests. Right now they are placeholder.
+ConVar vr_ipdtest_interp_relief_start_pixels ( "vr_ipdtest_interp_relief_start_pixels", "400.0", 0 );
+ConVar vr_ipdtest_interp_relief_start_inches ( "vr_ipdtest_interp_relief_start_inches", "0.0", 0 );
+ConVar vr_ipdtest_interp_relief_end_pixels   ( "vr_ipdtest_interp_relief_end_pixels",   "600.0", 0 );
+ConVar vr_ipdtest_interp_relief_end_inches   ( "vr_ipdtest_interp_relief_end_inches",   "1.0", 0 );
+
+float Interpolate ( float fIn, float fInStart, float fInEnd, float fOutStart, float fOutEnd )
+{
+	float fLamdba = ( fIn - fInStart ) / ( fInEnd - fInStart );
+	float fOut = fOutStart + fLamdba * ( fOutEnd - fOutStart );
+	return fOut;
+}
+
+void CHeadTrack::RecalcEyeCalibration(TEyeCalibration* p) {
 	DebugMsg("CHeadTrack::RecalcEyeCalibration\n");
+
+	int iDisplayWidth, iDisplayHeight;
+	bool bSuccess = g_pSourceVR->GetWindowSize( &iDisplayWidth, &iDisplayHeight );
+	Assert ( bSuccess );
+	if ( bSuccess )
+	{
+		// Eye relief.
+		// Many ways to take the average eye size. But since the top edge is hard to find (strains the eyes, and there's problems with glasses), let's just use the difference between left and right.
+		p->Left.fSizePixels = (float)( p->Left.iIn - p->Left.iOut );
+		p->Right.fSizePixels = (float)( p->Right.iIn - p->Right.iOut );
+		// ...not that we have any data yet, nor do we know what to do with it if we had it.
+		float fLeftInches = Interpolate ( p->Left.fSizePixels,
+			vr_ipdtest_interp_relief_start_pixels.GetFloat(),
+			vr_ipdtest_interp_relief_end_pixels.GetFloat(),
+			vr_ipdtest_interp_relief_start_inches.GetFloat(),
+			vr_ipdtest_interp_relief_end_inches.GetFloat() );
+		p->Left.fReliefInches = fLeftInches;
+		float fRightInches = Interpolate ( p->Right.fSizePixels,
+			vr_ipdtest_interp_relief_start_pixels.GetFloat(),
+			vr_ipdtest_interp_relief_end_pixels.GetFloat(),
+			vr_ipdtest_interp_relief_start_inches.GetFloat(),
+			vr_ipdtest_interp_relief_end_inches.GetFloat() );
+		p->Right.fReliefInches = fRightInches;
+
+		// Calculate IPD
+		// In and Out are both measured from the nearest edge of the display, i.e. the left ones from the left edge, the right ones from the right edge.
+		float fLeftMid = (float)( p->Left.iIn + p->Left.iOut ) * 0.5f;
+		float fRightMid = (float)( p->Right.iIn + p->Right.iOut ) * 0.5f;
+		// An outside value of 0 is the first actual pixel on the outer edge of the display.
+		// So if both values are 0, the two lines are (iDisplayWidth-1) apart.
+		float fSeparationInPixels = (float)( iDisplayWidth - 1 ) - fLeftMid - fRightMid;
+		float fIpdInches = Interpolate ( fSeparationInPixels,
+			vr_ipdtest_interp_ipd_start_pixels.GetFloat(),
+			vr_ipdtest_interp_ipd_end_pixels.GetFloat(),
+			vr_ipdtest_interp_ipd_start_inches.GetFloat(),
+			vr_ipdtest_interp_ipd_end_inches.GetFloat() );
+		p->fIpdInches = fIpdInches;
+		p->fIpdPixels = fSeparationInPixels;
+	}
 }
 
-void CHeadTrack::GetCurrentEyeCalibration(TEyeCalibration*) {
+void CHeadTrack::GetCurrentEyeCalibration(TEyeCalibration* p) {
 	DebugMsg("CHeadTrack::GetCurrentEyeCalibration\n");
+
+	p->Left.iTop  = vr_ipdtest_left_t.GetInt();
+	p->Left.iBot  = vr_ipdtest_left_b.GetInt();
+	p->Left.iIn   = vr_ipdtest_left_i.GetInt();
+	p->Left.iOut  = vr_ipdtest_left_o.GetInt();
+	p->Right.iTop = vr_ipdtest_right_t.GetInt();
+	p->Right.iBot = vr_ipdtest_right_b.GetInt();
+	p->Right.iIn  = vr_ipdtest_right_i.GetInt();
+	p->Right.iOut = vr_ipdtest_right_o.GetInt();
+	RecalcEyeCalibration ( p );
+	m_IpdTestCurrent = *p;
 }
 
-void CHeadTrack::SetCurrentEyeCalibration(const TEyeCalibration&) {
+void CHeadTrack::SetCurrentEyeCalibration(TEyeCalibration const& p) {
 	DebugMsg("CHeadTrack::SetCurrentEyeCalibration\n");
+
+	m_IpdTestCurrent = p;
+	RecalcEyeCalibration( &m_IpdTestCurrent );
+	g_pSourceVR->SetUserIPDMM( m_IpdTestCurrent.fIpdInches * 25.4f );
+	vr_ipdtest_left_t.SetValue  ( m_IpdTestCurrent.Left.iTop  );
+	vr_ipdtest_left_b.SetValue  ( m_IpdTestCurrent.Left.iBot  );
+	vr_ipdtest_left_i.SetValue  ( m_IpdTestCurrent.Left.iIn   );
+	vr_ipdtest_left_o.SetValue  ( m_IpdTestCurrent.Left.iOut  );
+	vr_ipdtest_right_t.SetValue ( m_IpdTestCurrent.Right.iTop );
+	vr_ipdtest_right_b.SetValue ( m_IpdTestCurrent.Right.iBot );
+	vr_ipdtest_right_i.SetValue ( m_IpdTestCurrent.Right.iIn  );
+	vr_ipdtest_right_o.SetValue ( m_IpdTestCurrent.Right.iOut );
+
+#ifdef _DEBUG
+	Warning ( "                          TBIO: left %d %d %d %d: right %d %d %d %d: %f inches\n",		// Need the spaces to center it so I can read it!
+		m_IpdTestCurrent.Left.iTop,
+		m_IpdTestCurrent.Left.iBot,
+		m_IpdTestCurrent.Left.iIn,
+		m_IpdTestCurrent.Left.iOut,
+		m_IpdTestCurrent.Right.iTop,
+		m_IpdTestCurrent.Right.iBot,
+		m_IpdTestCurrent.Right.iIn,
+		m_IpdTestCurrent.Right.iOut,
+		m_IpdTestCurrent.fIpdInches );
+#endif
 }
 
-void CHeadTrack::SetEyeCalibrationDisplayMisc(int, bool) {
+void CHeadTrack::SetEyeCalibrationDisplayMisc(int iEditingNum, bool bVisible) {
 	DebugMsg("CHeadTrack::SetEyeCalibrationDisplayMisc\n");
+
+	if( bVisible && !m_bIpdTestEnabled )
+	{
+		// if we're being shown, read out the current config from the convars
+		GetCurrentEyeCalibration( &m_IpdTestCurrent );
+	}
+
+	m_IpdTestControl = iEditingNum;
+	m_bIpdTestEnabled = bVisible;
 }
 
 ITracker* CHeadTrack::CreateTracker()
@@ -408,4 +868,4 @@ static VMatrix VMatrixFrom34(const float v[3][4])
 		0,       0,       0,       1       );
 }
 
-EXPOSE_SINGLE_INTERFACE_GLOBALVAR(CHeadTrack, IHeadTrack, "VHeadTrack001", g_HeadTrack);
+EXPOSE_SINGLE_INTERFACE_GLOBALVAR(CHeadTrack, IHeadTrack, HEADTRACK_INTERFACE_VERSION, g_HeadTrack);
