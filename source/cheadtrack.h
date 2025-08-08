@@ -30,31 +30,30 @@ public:
 	virtual void Shutdown();
 
 	virtual ~CHeadTrack();
-	virtual const char* GetDisplayName();
-	virtual void GetWindowBounds(int* windowWidth, int* windowHeight, int* pnX, int* pnY, int* renderWidth, int* renderHeight);
+	virtual const char *GetDisplayName();
+	virtual bool GetWindowBounds(int* pnWidth, int* pnHeight, int* pnUIWidth, int* pnUIHeight, int* pnViewportWidth, int* pnViewportHeight);
 	virtual IHeadTrack* CreateInstance();
-	virtual void ResetTracking();
-	virtual void SetCurrentCameraAsZero();
-	virtual void GetCameraFromWorldPose(VMatrix* pResultCameraFromWorldPose, VMatrix* pResultCameraFromWorldPoseUnpredicted = NULL, double* pflAcquireTime = NULL);
-	virtual void GetCameraPoseZeroFromCurrent(VMatrix* pResultMatrix);
-	virtual void GetCurrentEyeTransforms(THeadTrackResults&, THeadTrackParms&);
-	virtual void GetWorldFiducials(TWorldFiducial*, uint);
-	virtual void ProcessCurrentTrackingState(float PlayerGameFov);
-	virtual void OverrideView(CViewSetup* pViewMiddle, Vector* pViewModelOrigin, QAngle* pViewModelAngles, HeadtrackMovementMode_t hmmMovementOverride);
-	virtual void OverrideStereoView(CViewSetup* pViewMiddle, CViewSetup* pViewLeft, CViewSetup* pViewRight);
-	virtual void OverridePlayerMotion(float flInputSampleFrametime, const QAngle& oldAngles, const QAngle& curAngles, const Vector& curMotion, QAngle* pNewAngles, Vector* pNewMotion);
-	virtual void OverrideWeaponHudAimVectors(Vector* pAimOrigin, Vector* pAimDirection);
-	virtual void OverrideZNearFar(float*, float*);
-	virtual void OverrideTorsoTransform(const Vector&, const QAngle&);
+	virtual bool ResetTracking();
+	virtual bool SetCurrentCameraAsZero();
+	virtual bool GetCameraFromWorldPose(VMatrix* pResultCameraFromWorldPose, VMatrix* pResultCameraFromWorldPoseUnpredicted = NULL, double* pflAcquireTime = NULL);
+	virtual bool GetCameraPoseZeroFromCurrent(VMatrix* pResultMatrix);
+	virtual bool GetCurrentEyeTransforms(THeadTrackResults& HeadTrackResults, THeadTrackParms &HeadTrackParms);
+	virtual int GetWorldFiducials(TWorldFiducial* pData, unsigned nMaxCount);
+	virtual bool ProcessCurrentTrackingState(float PlayerGameFov);
+	virtual bool OverrideView(CViewSetup* pViewMiddle, Vector* pViewModelOrigin, QAngle* pViewModelAngles, HeadtrackMovementMode_t hmmMovementOverride);
+	virtual bool OverrideStereoView(CViewSetup* pViewMiddle, CViewSetup* pViewLeft, CViewSetup* pViewRight);
+	virtual bool OverridePlayerMotion(float flInputSampleFrametime, const QAngle& oldAngles, const QAngle& curAngles, const Vector& curMotion, QAngle* pNewAngles, Vector* pNewMotion);
+	virtual bool OverrideWeaponHudAimVectors(Vector* pAimOrigin, Vector* pAimDirection);
+	virtual void OverrideZNearFar(float* pZNear, float* pZFar);
+	virtual void OverrideTorsoTransform(const Vector& position, const QAngle& angles);
 	virtual void CancelTorsoTransformOverride();
-	virtual void GetTorsoRelativeAim(Vector*, QAngle*);
-	virtual void GetWorldFromMidEye();
-	virtual void GetZoomedModeMagnification();
-	virtual void GetCurrentEyeViewport(int&, int&, int&, int&);
-	virtual void SetCurrentStereoEye(StereoEye_t);
-	virtual void DoDistortionProcessing(const vrect_t*);
+	virtual void GetTorsoRelativeAim(Vector* pPosition, QAngle* pAngles);
+	virtual VMatrix GetWorldFromMidEye();
+	virtual float GetZoomedModeMagnification();
+	virtual void GetCurrentEyeViewport(int& x, int& y, int& w, int& h);
+	virtual void SetCurrentStereoEye(StereoEye_t eEye);
+	virtual bool DoDistortionProcessing(const vrect_t *SrcRect);
 	virtual void AlignTorsoAndViewToWeapon();
-	virtual void OverrideViewModelTransform(Vector&, QAngle&, bool);
 	virtual bool ShouldRenderHUDInWorld();
 	virtual float GetHUDDistance();
 	virtual bool ShouldRenderStereoHUD();
@@ -75,8 +74,9 @@ public:
 protected:
 	bool ReinitTracker();
 	ITracker* CreateTracker();
-	void InitHMD();
+	bool InitHMD();
 	void InitTracker();
+	bool CurrentlyZoomed();
 
 	void GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *pUR, Vector *pLL, Vector *pLR );
 
@@ -84,6 +84,8 @@ private:
 	bool m_bActive;
 	bool m_bShouldForceVRMode;
 	bool m_bUsingOffscreenRenderTarget; 
+	ITracker* m_pTracker = NULL;
+
 	/*CDistortionTextureRegen m_textureGeneratorLeft;
 	CDistortionTextureRegen m_textureGeneratorRight;
 	CTextureReference g_StereoGuiTexture;
@@ -150,4 +152,8 @@ private:
 	bool			m_bIpdTestEnabled;
 	int				m_IpdTestControl;
 	TEyeCalibration m_IpdTestCurrent;
+
+	VMatrix m_CameraZeroFromWorld;
+    bool m_bHasCameraZero = false;
+	float m_fPlayerGameFov = 90.0f;
 };

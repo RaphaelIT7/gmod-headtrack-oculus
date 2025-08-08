@@ -6,8 +6,9 @@
 #include "materialsystem/imesh.h"
 #include "ienginevgui.h"
 #include "vgui/ISurface.h"
-#include "c_baseplayer.h"
-#include "c_baseviewmodel.h"
+#include "materialsystem/imaterialsystem.h"
+#include "cbase.h"
+#include <vector>
 
 CHeadTrack g_HeadTrack;
 
@@ -34,8 +35,6 @@ void DebugMsg(const char* fmt, ...)
 	delete[] buffer;
 	va_end(args);
 }
-
-ConVar vr_moveaim_mode_zoom("vr_moveaim_mode_zoom", "0");
 
 void CC_VR_Reset_Home_Pos( const CCommand& cmd )
 {
@@ -142,20 +141,24 @@ ConVar vr_ipdtest_right_o ( "vr_ipdtest_right_o", "200", FCVAR_ARCHIVE );
 
 ConVar vr_vehicle_aim_mode( "vr_vehicle_aim_mode", "0", FCVAR_ARCHIVE, "Specifies how to aim vehicle weapon ( tracked weapon = 0, view = 1 )" );
 
-static bool IsMenuUp( )
+static IEngineVGui* enginevgui = NULL;
+static vgui::ISurface* g_pVGUISurface = NULL;
+static bool IsMenuUp()
 {
-	return ((enginevgui && enginevgui->IsGameUIVisible())  || vgui::surface()->IsCursorVisible() );
+	return ((enginevgui && enginevgui->IsGameUIVisible()) || (g_pVGUISurface && g_pVGUISurface->IsCursorVisible()) );
 }
 
 CHeadTrack::CHeadTrack()
 {
 }
 
-CHeadTrack::~CHeadTrack() {
+CHeadTrack::~CHeadTrack()
+{
 	DebugMsg("CHeadTrack::~CHeadTrack\n");
 }
 
-bool CHeadTrack::Connect(CreateInterfaceFn factory) {
+bool CHeadTrack::Connect(CreateInterfaceFn factory)
+{
 	DebugMsg("CHeadTrack::Connect\n");
 
 	if (!factory)
@@ -163,6 +166,19 @@ bool CHeadTrack::Connect(CreateInterfaceFn factory) {
 
 	if (!BaseClass::Connect(factory))
 		return false;
+
+	ConnectTier1Libraries(&factory, 1);
+	g_pVGUISurface = (vgui::ISurface*)factory(VGUI_SURFACE_INTERFACE_VERSION, NULL);
+	if (!g_pVGUISurface)
+		Warning("headtrack: failed to load " VGUI_SURFACE_INTERFACE_VERSION "\n");
+
+	enginevgui = (IEngineVGui*)factory(VENGINE_VGUI_VERSION, NULL);
+	if (!enginevgui)
+		Warning("headtrack: failed to load " VENGINE_VGUI_VERSION "\n");
+
+	materials = (IMaterialSystem*)factory(MATERIAL_SYSTEM_INTERFACE_VERSION, NULL);
+	if (!materials)
+		Warning("headtrack: failed to load " MATERIAL_SYSTEM_INTERFACE_VERSION "\n");
 
 	if (!g_pFullFileSystem)
 	{
@@ -173,19 +189,22 @@ bool CHeadTrack::Connect(CreateInterfaceFn factory) {
 	return true;
 }
 
-void CHeadTrack::Disconnect() {
+void CHeadTrack::Disconnect()
+{
 	DebugMsg("CHeadTrack::Disconnect\n");
 
 	BaseClass::Disconnect();
 }
 
-void* CHeadTrack::QueryInterface(const char* pInterfaceName) {
+void* CHeadTrack::QueryInterface(const char* pInterfaceName)
+{
 	DebugMsg("CHeadTrack::QueryInterface %s\n", pInterfaceName);
 
 	return Sys_GetFactoryThis()(pInterfaceName, NULL);	
 }
 
-InitReturnVal_t CHeadTrack::Init() {
+InitReturnVal_t CHeadTrack::Init()
+{
 	DebugMsg("CHeadTrack::Init\n");
 
 	InitReturnVal_t nRetVal = BaseClass::Init();
@@ -196,118 +215,819 @@ InitReturnVal_t CHeadTrack::Init() {
 
 	MathLib_Init(2.2f, 2.2f, 0.0f, 2.0f);
 
+	if (!ReinitTracker())
+	{
+		Warning("Failed to initialize head tracker!\n");
+		return INIT_FAILED;
+	}
+
 	return INIT_OK;
 }
 
-void CHeadTrack::Shutdown() {
+void CHeadTrack::Shutdown()
+{
 	DebugMsg("CHeadTrack::Shutdown\n");
+
+	if (m_pTracker)
+	{
+		m_pTracker->Shutdown();
+		delete m_pTracker;
+		m_pTracker = nullptr;
+	}
 
 	BaseClass::Shutdown();
 }
 
-const char* CHeadTrack::GetDisplayName() {
+const char* CHeadTrack::GetDisplayName()
+{
 	DebugMsg("CHeadTrack::GetDisplayName\n");
+	if (!m_pTracker)
+		return nullptr;
 
-	return NULL;
+	return m_pTracker->GetDisplayName();
 }
 
-void CHeadTrack::GetWindowBounds(int* windowWidth, int* windowHeight, int* pnX, int* pnY, int* renderWidth, int* renderHeight) {
+bool CHeadTrack::GetWindowBounds(int* pnWidth, int* pnHeight, int* pnUIWidth, int* pnUIHeight, int* pnViewportWidth, int* pnViewportHeight)
+{
 	DebugMsg("CHeadTrack::GetWindowBounds\n");
 
-	*windowWidth = 1920;
-	*windowHeight = 1080;
-	*pnX = 1;
-	*pnY = 100;
-	*renderWidth = 1920;
-	*renderHeight = 1080;
+	if (!m_pTracker)
+		return false;
+
+	return m_pTracker->GetWindowBounds(pnWidth, pnHeight, pnUIWidth, pnUIHeight, pnViewportWidth, pnViewportHeight);
 }
 
-IHeadTrack* CHeadTrack::CreateInstance() {
+IHeadTrack* CHeadTrack::CreateInstance()
+{
 	DebugMsg("CHeadTrack::CreateInstance\n");
 
 	return &g_HeadTrack; // normally returns new CHeadTrack();
 }
 
-void CHeadTrack::ResetTracking() {
+bool CHeadTrack::ResetTracking()
+{
 	DebugMsg("CHeadTrack::ResetTracking\n");
+
+	ReinitTracker();
+	return false;
 }
 
-void CHeadTrack::SetCurrentCameraAsZero() {
+bool CHeadTrack::SetCurrentCameraAsZero()
+{
 	DebugMsg("CHeadTrack::SetCurrentCameraAsZero\n");
+	VMatrix curPose;
+	if (!GetCameraFromWorldPose(&curPose, nullptr, nullptr))
+		return false;
+
+	m_CameraZeroFromWorld = curPose;
+	m_bHasCameraZero = true;
+	return true;
 }
 
-void CHeadTrack::GetCameraFromWorldPose(VMatrix*, VMatrix*, double*) {
+bool CHeadTrack::GetCameraFromWorldPose(VMatrix* pResultCameraFromWorldPose, VMatrix* pResultCameraFromWorldPoseUnpredicted, double* pflAcquireTime)
+{
 	DebugMsg("CHeadTrack::GetCameraFromWorldPose\n");
+	if (!m_pTracker)
+		return false;
+
+	m_pTracker->BGetCurrentCameraFromWorldPose(pResultCameraFromWorldPose, pResultCameraFromWorldPoseUnpredicted, pflAcquireTime);
+	return true;
 }
 
-void CHeadTrack::GetCameraPoseZeroFromCurrent(VMatrix*) {
+bool CHeadTrack::GetCameraPoseZeroFromCurrent(VMatrix* pResultMatrix)
+{
 	DebugMsg("CHeadTrack::GetCameraPoseZeroFromCurrent\n");
+	if (!m_bHasCameraZero || !pResultMatrix)
+		return false;
+
+	VMatrix curPose;
+	if (!GetCameraFromWorldPose(&curPose, nullptr, nullptr))
+		return false;
+
+	*pResultMatrix = m_CameraZeroFromWorld * curPose.InverseTR();
+	return true;
 }
 
-void CHeadTrack::GetCurrentEyeTransforms(THeadTrackResults&, THeadTrackParms&) {
+bool CHeadTrack::GetCurrentEyeTransforms(THeadTrackResults& HeadTrackResults, THeadTrackParms& HeadTrackParms)
+{
 	DebugMsg("CHeadTrack::GetCurrentEyeTransforms\n");
+	if (!m_pTracker)
+		return false;
+
+	for (int eye = 0; eye < 3; ++eye)
+	{
+		VMatrix eyePose, eyeProj;
+		float zNear = HeadTrackParms.m_zNear > 0 ? HeadTrackParms.m_zNear : 0.1f;
+		float zFar = HeadTrackParms.m_zFar > 0 ? HeadTrackParms.m_zFar : 1000.0f;
+
+		m_pTracker->GetEyePose(eye, &eyePose);
+		m_pTracker->GetEyeProjection(eye, zNear, zFar, &eyeProj);
+
+		HeadTrackResults.m_ViewMatrix[eye] = eyePose;
+		HeadTrackResults.m_ProjectionMatrix[eye] = eyeProj;
+
+		HeadTrackResults.m_ViewMatrixUnpredicted[eye] = eyePose;
+	}
+
+	HeadTrackResults.m_flAcquireTime = Plat_FloatTime();
+
+	return true;
 }
 
-void CHeadTrack::GetWorldFiducials(TWorldFiducial*, uint) {
+int CHeadTrack::GetWorldFiducials(TWorldFiducial* pData, unsigned nMaxCount)
+{
 	DebugMsg("CHeadTrack::GetWorldFiducials\n");
+	if (!m_pTracker)
+		return 0;
+
+	return m_pTracker->GetWorldFiducials(pData, nMaxCount);
 }
 
-void CHeadTrack::ProcessCurrentTrackingState(float) {
+bool CHeadTrack::ProcessCurrentTrackingState(float PlayerGameFov)
+{
 	DebugMsg("CHeadTrack::ProcessCurrentTrackingState\n");
+	if (!m_bActive || !m_pTracker)
+		return false;
+
+	m_fPlayerGameFov = PlayerGameFov;
+	float hudFovDegrees = m_pTracker->GetHorizontalFovDegrees();
+	float hudFov = hudFovDegrees * vr_hud_display_ratio.GetFloat();
+	if (hudFov > vr_hud_max_fov.GetFloat())
+		hudFov = vr_hud_max_fov.GetFloat();
+	m_fHudHorizontalFov = hudFov;
+
+	m_WorldZoomScale = 1.0f;
+	if (PlayerGameFov != 0.0f)
+	{
+		float zoomMult = vr_zoom_multiplier.GetFloat();
+		float gameFov = PlayerGameFov * (1.0f / zoomMult);
+		if (gameFov > 170.0f)
+			gameFov = 170.0f;
+
+		float wantedGameTanfov = tanf(DEG2RAD(gameFov * 0.5f));
+		float overlayActualPhysicalTanfov = tanf(DEG2RAD(m_fHudHorizontalFov * 0.5f));
+		m_WorldZoomScale = wantedGameTanfov / overlayActualPhysicalTanfov;
+	}
+
+	if (!GetCameraFromWorldPose(&m_WorldFromMidEye, nullptr, nullptr)) {
+		m_WorldFromMidEye.Identity();
+		return false;
+	}
+
+	m_WorldFromMidEyeNoDebugCam = m_WorldFromMidEye;
+
+	return true;
 }
 
-void CHeadTrack::OverrideView(CViewSetup*, Vector*, QAngle*, HeadtrackMovementMode_t) {
+// --------------------------------------------------------------------
+// Purpose:
+//		Offset the incoming view appropriately.
+//		Set up the "middle eye" from that.
+// --------------------------------------------------------------------
+bool CHeadTrack::OverrideView(CViewSetup* pViewMiddle, Vector* pViewModelOrigin, QAngle* pViewModelAngles, HeadtrackMovementMode_t hmmMovementOverride)
+{
 	DebugMsg("CHeadTrack::OverrideView\n");
+	if (!m_bActive || !m_pTracker)
+		return false;
+
+	if ( hmmMovementOverride == HMM_NOOVERRIDE )
+	{
+		if ( CurrentlyZoomed() )
+		{
+			m_hmmMovementActual = static_cast<HeadtrackMovementMode_t>( vr_moveaim_mode_zoom.GetInt() );
+		}
+		else
+		{
+			m_hmmMovementActual = static_cast<HeadtrackMovementMode_t>( vr_moveaim_mode.GetInt() );
+		}
+	}
+	else
+	{
+		m_hmmMovementActual = hmmMovementOverride;
+	}
+
+
+	// Incoming data may or may not be useful - it is the origin and aim of the "player", i.e. where bullets come from.
+	// In some modes it is an independent thing, guided by the mouse & keyboard = useful.
+	// In other modes it's just where the HMD was pointed last frame, modified slightly by kbd+mouse.
+	// In those cases, we should use our internal reference (which keeps track thanks to OverridePlayerMotion)
+	QAngle originalMiddleAngles = pViewMiddle->angles;
+	Vector originalMiddleOrigin = pViewMiddle->origin;
+
+	// Figure out the in-game "torso" concept, which corresponds to the player's physical torso.
+	m_PlayerTorsoOrigin = pViewMiddle->origin;
+
+	// Ignore what was passed in - it's just the direction the weapon is pointing, which was determined by last frame's HMD orientation!
+	// Instead use our cached value.
+	QAngle torsoAngles = m_PlayerTorsoAngle;
+
+	VMatrix worldFromTorso;
+	AngleMatrix(torsoAngles, const_cast<matrix3x4_t&>(worldFromTorso.As3x4()));
+	worldFromTorso.SetTranslation ( m_PlayerTorsoOrigin );
+
+	//// Scale translation e.g. to allow big in-game leans with only a small head movement.
+	//// Clamp HMD movement to a reasonable amount to avoid wallhacks, vis problems, etc.
+	float limit = vr_translation_limit.GetFloat();
+	VMatrix matMideyeZeroFromMideyeCurrent;
+	m_pTracker->GetMideyePose(&matMideyeZeroFromMideyeCurrent);
+	Vector viewTranslation = matMideyeZeroFromMideyeCurrent.GetTranslation();
+	if ( viewTranslation.IsLengthGreaterThan ( limit ) )
+	{
+		viewTranslation.NormalizeInPlace();
+		viewTranslation *= limit;
+		matMideyeZeroFromMideyeCurrent.SetTranslation( viewTranslation );
+	}
+
+	// Now figure out the three principal matrices: m_TorsoFromMideye, m_WorldFromMidEye, m_WorldFromWeapon
+	// m_TorsoFromMideye is done so that OverridePlayerMotion knows what to do with WASD.
+
+	switch ( m_hmmMovementActual )
+	{
+	case HMM_SHOOTFACE_MOVEFACE:
+	case HMM_SHOOTFACE_MOVETORSO:
+		// Aim point is down your nose, i.e. same as the view angles.
+		m_TorsoFromMideye = matMideyeZeroFromMideyeCurrent;
+		m_WorldFromMidEye = worldFromTorso * matMideyeZeroFromMideyeCurrent;
+		m_WorldFromWeapon = m_WorldFromMidEye;
+		break;
+
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEFACE:
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEMOUSE:
+	case HMM_SHOOTMOUSE_MOVEFACE:
+	case HMM_SHOOTMOVEMOUSE_LOOKFACE:
+		// Aim point is independent of view - leave it as it was, just copy it into m_WorldFromWeapon for our use.
+		m_TorsoFromMideye = matMideyeZeroFromMideyeCurrent;
+		m_WorldFromMidEye = worldFromTorso * matMideyeZeroFromMideyeCurrent;
+		AngleMatrix ( originalMiddleAngles, const_cast<matrix3x4_t&>(m_WorldFromWeapon.As3x4()) );
+		m_WorldFromWeapon.SetTranslation ( originalMiddleOrigin );
+		break;
+
+	case HMM_SHOOTMOVELOOKMOUSE:
+		// HMD is ignored completely, mouse does everything.
+		m_PlayerTorsoAngle = originalMiddleAngles;
+		AngleMatrix ( originalMiddleAngles, const_cast<matrix3x4_t&>(worldFromTorso.As3x4()) );
+		worldFromTorso.SetTranslation ( m_PlayerTorsoOrigin );
+
+		m_TorsoFromMideye.Identity();
+		m_WorldFromMidEye = worldFromTorso;
+		m_WorldFromWeapon = worldFromTorso;
+		break;
+
+	case HMM_SHOOTMOVELOOKMOUSEFACE:
+		// mouse does everything, and then we add head tracking on top of that
+		worldFromTorso = worldFromTorso * matMideyeZeroFromMideyeCurrent; 
+
+		m_TorsoFromMideye = matMideyeZeroFromMideyeCurrent;
+		m_WorldFromWeapon = worldFromTorso;
+		m_WorldFromMidEye = worldFromTorso;
+		break;
+
+	default: Assert ( false ); break;
+	}
+
+	// Finally convert back to origin+angles that the game understands.
+	pViewMiddle->origin = m_WorldFromMidEye.GetTranslation();
+	VectorAngles ( m_WorldFromMidEye.GetForward(), m_WorldFromMidEye.GetUp(), pViewMiddle->angles );
+
+	*pViewModelAngles = pViewMiddle->angles;
+	if ( vr_viewmodel_translate_with_head.GetBool() )
+	{
+		*pViewModelOrigin = pViewMiddle->origin;
+	}
+	else
+	{
+		*pViewModelOrigin = originalMiddleOrigin;
+	}
+
+	m_WorldFromMidEyeNoDebugCam = m_WorldFromMidEye;
+	if ( vr_debug_remote_cam.GetBool() )
+	{
+		Vector vOffset ( vr_debug_remote_cam_pos_x.GetFloat(), vr_debug_remote_cam_pos_y.GetFloat(), vr_debug_remote_cam_pos_z.GetFloat() );
+		Vector vLookat ( vr_debug_remote_cam_target_x.GetFloat(), vr_debug_remote_cam_target_y.GetFloat(), vr_debug_remote_cam_target_z.GetFloat() );
+		pViewMiddle->origin += vOffset;
+		Vector vView = vLookat - vOffset;
+		VectorAngles ( vView, m_WorldFromMidEye.GetUp(), pViewMiddle->angles );
+
+		AngleMatrix(pViewMiddle->angles, const_cast<matrix3x4_t&>(m_WorldFromMidEye.As3x4()));
+
+		m_WorldFromMidEye.SetTranslation ( pViewMiddle->origin );
+		m_TorsoFromMideye.Identity();
+	}
+
+	// set the near clip plane so the local player clips less
+	pViewMiddle->zNear *= vr_projection_znear_multiplier.GetFloat();
+
+	return true;
 }
 
-void CHeadTrack::OverrideStereoView(CViewSetup*, CViewSetup*, CViewSetup*) {
+// --------------------------------------------------------------------
+// Purpose:
+//		Set up the left and right eyes from the middle eye if stereo is on.
+//		Advise calling soonish after OverrideView().
+// --------------------------------------------------------------------
+extern void CalcFovFromProjection ( float *pFov, const VMatrix &proj );
+extern bool IsOrthonormal ( VMatrix Mat, float fTolerance );
+bool CHeadTrack::OverrideStereoView(CViewSetup* pViewMiddle, CViewSetup* pViewLeft, CViewSetup* pViewRight)
+{
 	DebugMsg("CHeadTrack::OverrideStereoView\n");
+	if (!m_bActive || !m_pTracker)
+		return false;
+
+	if ( vr_stereo_swap_eyes.GetBool() )
+	{
+		// Windows likes to randomly rename display numbers which causes eye-swaps, so this tries to cope with that.
+		CViewSetup *pViewTemp = pViewLeft;
+		pViewLeft = pViewRight;
+		pViewRight = pViewTemp;
+	}
+
+	// Move eyes to calibrated positions.
+	VMatrix midEyeFromLeft, midEyeFromRight;
+	m_pTracker->GetMidEyeFromLeft(&midEyeFromLeft);
+	m_pTracker->GetMidEyeFromRight(&midEyeFromRight);
+
+	VMatrix worldFromLeftEye  = m_WorldFromMidEye * midEyeFromLeft;
+	VMatrix worldFromRightEye = m_WorldFromMidEye * midEyeFromRight;
+
+	Assert ( IsOrthonormal ( worldFromLeftEye, 0.001f ) );
+	Assert ( IsOrthonormal ( worldFromRightEye, 0.001f ) );
+
+	Vector rightFromLeft = worldFromRightEye.GetTranslation() - worldFromLeftEye.GetTranslation();
+	//float calibratedIPD = rightFromLeft.Length();		// THIS IS NOT CORRECT. The positions of the virtual cameras do have any real physical "meaning" with the way we currently calibrate.
+	float calibratedIPD = m_pTracker->GetDisplaySeparationMM() / 25.4f;
+
+	// Scale the eyes closer/further to fit the desired IPD.
+	// (the calibrated distance is the IPD of whoever calibrated it!)
+	float desiredIPD = m_pTracker->GetUserIPDMM() / 25.4f;
+	if ( calibratedIPD < 0.000001f )
+	{
+		// No HMD, or a monocular HMD.
+	}
+	else
+	{
+		float scale = 0.5f * ( desiredIPD - calibratedIPD ) / calibratedIPD;
+		worldFromLeftEye.SetTranslation  ( worldFromLeftEye.GetTranslation()  - ( scale * rightFromLeft ) );
+		worldFromRightEye.SetTranslation ( worldFromRightEye.GetTranslation() + ( scale * rightFromLeft ) );
+	}
+
+	Assert ( IsOrthonormal ( worldFromLeftEye, 0.001f ) );
+	Assert ( IsOrthonormal ( worldFromRightEye, 0.001f ) );
+
+	// Finally convert back to origin+angles.
+	pViewLeft->origin  = worldFromLeftEye.GetTranslation();
+	VectorAngles ( worldFromLeftEye.GetForward(),  worldFromLeftEye.GetUp(),  pViewLeft->angles );
+	pViewRight->origin = worldFromRightEye.GetTranslation();
+	VectorAngles ( worldFromRightEye.GetForward(), worldFromRightEye.GetUp(), pViewRight->angles );
+
+	// Find the projection matrices.
+
+	// TODO: this isn't the fastest thing in the world. Cache them?
+	float headtrackFovScale = m_WorldZoomScale;
+	pViewLeft->m_bViewToProjectionOverride = true;
+	pViewRight->m_bViewToProjectionOverride = true;
+	m_pTracker->GetEyeProjectionMatrix(  &pViewLeft->m_ViewToProjection, vr::Eye_Left,  pViewMiddle->zNear, pViewMiddle->zFar, 1.0f/headtrackFovScale );
+	m_pTracker->GetEyeProjectionMatrix( &pViewRight->m_ViewToProjection, vr::Eye_Right, pViewMiddle->zNear, pViewMiddle->zFar, 1.0f/headtrackFovScale );
+
+	// And bodge together some sort of average for our cyclops friends.
+	pViewMiddle->m_bViewToProjectionOverride = true;
+	for ( int i = 0; i < 4; i++ )
+	{
+		for ( int j = 0; j < 4; j++ )
+		{
+			pViewMiddle->m_ViewToProjection.m[i][j] = (pViewLeft->m_ViewToProjection.m[i][j] + pViewRight->m_ViewToProjection.m[i][j] ) * 0.5f;
+		}
+	}
+
+	if ( vr_dont_use_calibration_projection.GetBool() )
+	{
+		pViewLeft  ->m_bViewToProjectionOverride = false;
+		pViewRight ->m_bViewToProjectionOverride = false;
+		pViewMiddle->m_bViewToProjectionOverride = false;
+	}
+
+	switch ( vr_stereo_mono_set_eye.GetInt() )
+	{
+	case 0:
+		// ... nothing.
+		break;
+	case 1:
+		// Override all eyes with left
+		*pViewMiddle = *pViewLeft;
+		*pViewRight = *pViewLeft;
+		pViewRight->m_eStereoEye = STEREO_EYE_RIGHT;
+		break;
+	case 2:
+		// Override all eyes with right
+		*pViewMiddle = *pViewRight;
+		*pViewLeft = *pViewRight;
+		pViewLeft->m_eStereoEye = STEREO_EYE_LEFT;
+		break;
+	case 3:
+		// Override all eyes with middle
+		*pViewRight = *pViewMiddle;
+		*pViewLeft = *pViewMiddle;
+		pViewLeft->m_eStereoEye = STEREO_EYE_LEFT;
+		pViewRight->m_eStereoEye = STEREO_EYE_RIGHT;
+		break;
+	}
+
+	// To make culling work correctly, calculate the widest FOV of each projection matrix.
+	CalcFovFromProjection( &(pViewLeft  ->fov), pViewLeft  ->m_ViewToProjection );
+	CalcFovFromProjection( &(pViewRight ->fov), pViewRight ->m_ViewToProjection );
+	CalcFovFromProjection( &(pViewMiddle->fov), pViewMiddle->m_ViewToProjection );
+
+	// remember the view angles so we can limit the weapon to something near those
+	m_PlayerViewAngle = pViewMiddle->angles;
+	m_PlayerViewOrigin = pViewMiddle->origin;
+
+
+
+	// Figure out the HUD vectors and frustum.
+
+	// The aspect ratio of the HMD may be something bizarre (e.g. Rift is 640x800), and the pixels may not be square, so don't use that!
+	static const float fAspectRatio = 4.f/3.f;
+	float fHFOV = m_fHudHorizontalFov;
+	float fVFOV = m_fHudHorizontalFov / fAspectRatio;
+
+	const float fHudForward = vr_hud_forward.GetFloat();
+	m_fHudHalfWidth = tan( DEG2RAD( fHFOV * 0.5f ) ) * fHudForward * m_WorldZoomScale;
+	m_fHudHalfHeight = tan( DEG2RAD( fVFOV * 0.5f ) ) * fHudForward * m_WorldZoomScale;
+
+	QAngle HudAngles;
+	VMatrix HudUpCorrection;
+	switch ( m_hmmMovementActual )
+	{
+	case HMM_SHOOTFACE_MOVETORSO:
+		// Put the HUD in front of the player's torso.
+		// This helps keep you oriented about where "forwards" is, which is otherwise surprisingly tricky!
+		// TODO: try preserving roll and/or pitch from the view?
+		HudAngles = m_PlayerTorsoAngle;
+		HudUpCorrection.Identity();
+		break;
+	case HMM_SHOOTFACE_MOVEFACE:
+	case HMM_SHOOTMOUSE_MOVEFACE:
+	case HMM_SHOOTMOVEMOUSE_LOOKFACE:
+	case HMM_SHOOTMOVELOOKMOUSE:
+	case HMM_SHOOTMOVELOOKMOUSEFACE:
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEFACE:
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEMOUSE:
+		// Put the HUD in front of wherever the player is looking.
+		HudAngles = m_PlayerViewAngle;
+		HudUpCorrection = m_pTracker->GetHudUpCorrection();
+		break;
+	default: Assert ( false ); break;
+	}
+
+	// This is a bitfield. A set bit means lock to the world, a clear bit means don't.
+	int iVrHudAxisLockToWorld = vr_hud_axis_lock_to_world.GetInt();
+	if ( ( iVrHudAxisLockToWorld & (1<<ROLL) ) != 0 )
+	{
+		HudAngles[ROLL] = 0.0f;
+	}
+	if ( ( iVrHudAxisLockToWorld & (1<<PITCH) ) != 0 )
+	{
+		HudAngles[PITCH] = 0.0f;
+	}
+	if ( ( iVrHudAxisLockToWorld & (1<<YAW) ) != 0 )
+	{
+		// Locking the yaw to the world is not particularly helpful, so what it actually means is lock it to the weapon.
+		QAngle aimAngles;
+		MatrixAngles( m_WorldFromWeapon.As3x4(), aimAngles );
+		HudAngles[YAW] = aimAngles[YAW];
+	}
+	AngleMatrix ( HudAngles, const_cast<matrix3x4_t&>(m_WorldFromHud.As3x4()) );
+	m_WorldFromHud.SetTranslation ( m_PlayerViewOrigin );
+	m_WorldFromHud = m_WorldFromHud * HudUpCorrection;
+
+	// Remember in source X forwards, Y left, Z up.
+	// We need to transform to a more conventional X right, Y up, Z backwards before doing the projection.
+	VMatrix WorldFromHudView;
+	WorldFromHudView./*X vector*/SetForward ( -m_WorldFromHud.GetLeft() );
+	WorldFromHudView./*Y vector*/SetLeft    ( m_WorldFromHud.GetUp() );
+	WorldFromHudView./*Z vector*/SetUp      ( -m_WorldFromHud.GetForward() );
+	WorldFromHudView.SetTranslation         ( m_PlayerViewOrigin );
+
+	VMatrix HudProjection;
+	HudProjection.Identity();
+	HudProjection.m[0][0] = fHudForward / m_fHudHalfWidth;
+	HudProjection.m[1][1] = fHudForward / m_fHudHalfHeight;
+	// Z vector is not used/valid, but w is for projection.
+	HudProjection.m[3][2] = -1.0f;
+
+	// This will transform a world point into a homogeneous vector that
+	//  when projected (i.e. divide by w) maps to HUD space [-1,1]
+	m_HudProjectionFromWorld = HudProjection * WorldFromHudView.InverseTR();
+
+	return true;
 }
 
-void CHeadTrack::OverridePlayerMotion(float, const QAngle&, const QAngle&, const Vector&, QAngle*, Vector*) {
+bool CHeadTrack::OverridePlayerMotion( float flInputSampleFrametime, const QAngle &oldAngles, const QAngle &curAngles, const Vector &curMotion, QAngle *pNewAngles, Vector *pNewMotion )
+{
 	DebugMsg("CHeadTrack::OverridePlayerMotion\n");
+	Assert ( pNewAngles != NULL );
+	Assert ( pNewMotion != NULL );
+	*pNewAngles = curAngles;
+	*pNewMotion = curMotion;
+
+	if (!m_bActive || !m_pTracker)
+		return false;
+
+	m_bMotionUpdated = true;
+
+	// originalAngles tells us what the weapon angles were before whatever mouse, joystick, etc thing changed them - called "old"
+	// curAngles holds the new weapon angles after mouse, joystick, etc. applied.
+	// We need to compute what weapon angles WE want and return them in *pNewAngles - called "new"
+	VMatrix worldFromTorso;
+
+	// Whatever position is already here (set up by OverrideView) needs to be preserved.
+	Vector vWeaponOrigin = m_WorldFromWeapon.GetTranslation();
+
+	switch ( m_hmmMovementActual )
+	{
+	case HMM_SHOOTFACE_MOVEFACE:
+	case HMM_SHOOTFACE_MOVETORSO:
+		{
+			// Figure out what changes were made to the WEAPON by mouse/joystick/etc
+			VMatrix worldFromOldWeapon, worldFromCurWeapon;
+			AngleMatrix ( oldAngles, const_cast<matrix3x4_t&>(worldFromOldWeapon.As3x4()) );
+			AngleMatrix ( curAngles, const_cast<matrix3x4_t&>(worldFromCurWeapon.As3x4()) );
+
+			// We ignore mouse pitch, the mouse can't do rolls, so it's just yaw changes.
+			if( !m_bOverrideTorsoAngle )
+			{
+				m_PlayerTorsoAngle[YAW] += curAngles[YAW] - oldAngles[YAW];
+				m_PlayerTorsoAngle[ROLL] = 0.0f;
+				m_PlayerTorsoAngle[PITCH] = 0.0f;
+			}
+
+			AngleMatrix ( m_PlayerTorsoAngle, const_cast<matrix3x4_t&>(worldFromTorso.As3x4()) );
+
+			// Weapon view = mideye view, so apply that to the torso to find the world view direction.
+			m_WorldFromWeapon = worldFromTorso * m_TorsoFromMideye;
+
+			// ...and we return this new weapon direction as the player's orientation.
+			MatrixAngles( m_WorldFromWeapon.As3x4(), *pNewAngles );
+
+			// Restore the translation.
+			m_WorldFromWeapon.SetTranslation ( vWeaponOrigin );
+		}
+		break;
+	case HMM_SHOOTMOVELOOKMOUSEFACE:
+	case HMM_SHOOTMOVEMOUSE_LOOKFACE:
+	case HMM_SHOOTMOVELOOKMOUSE:
+		{
+			// The mouse just controls the weapon directly.
+			*pNewAngles = curAngles;
+			*pNewMotion = curMotion;
+
+			// Move the torso by the yaw angles - torso should not have roll or pitch or you'll make folks ill.
+			if( !m_bOverrideTorsoAngle && m_hmmMovementActual != HMM_SHOOTMOVELOOKMOUSEFACE )
+			{
+				m_PlayerTorsoAngle[YAW] = curAngles[YAW];
+				m_PlayerTorsoAngle[ROLL] = 0.0f;
+				m_PlayerTorsoAngle[PITCH] = 0.0f;
+			}
+
+			// Let every other system know.
+			AngleMatrix( *pNewAngles, const_cast<matrix3x4_t&>(m_WorldFromWeapon.As3x4()) );
+			AngleMatrix( m_PlayerTorsoAngle, const_cast<matrix3x4_t&>(worldFromTorso.As3x4()) );
+			// Restore the translation.
+			m_WorldFromWeapon.SetTranslation ( vWeaponOrigin );
+		}
+		break;
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEFACE:
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEMOUSE:
+		{
+			// The mouse controls the weapon directly.
+			*pNewAngles = curAngles;
+			*pNewMotion = curMotion;
+
+			float fReticleYawLimit = vr_moveaim_reticle_yaw_limit.GetFloat();
+			float fReticlePitchLimit = vr_moveaim_reticle_pitch_limit.GetFloat();
+
+			if ( CurrentlyZoomed() )
+			{
+				fReticleYawLimit = vr_moveaim_reticle_yaw_limit_zoom.GetFloat() * m_WorldZoomScale;
+				fReticlePitchLimit = vr_moveaim_reticle_pitch_limit_zoom.GetFloat() * m_WorldZoomScale;
+				if ( fReticleYawLimit > 180.0f )
+				{
+					fReticleYawLimit = 180.0f;
+				}
+				if ( fReticlePitchLimit > 180.0f )
+				{
+					fReticlePitchLimit = 180.0f;
+				}
+			}
+
+			if ( fReticlePitchLimit >= 0.0f )
+			{
+				// Clamp pitch to within the limits.
+				(*pNewAngles)[PITCH] = Clamp ( curAngles[PITCH], m_PlayerViewAngle[PITCH] - fReticlePitchLimit, m_PlayerViewAngle[PITCH] + fReticlePitchLimit );
+			}
+
+			// For yaw the concept here is the torso stays within a set number of degrees of the weapon in yaw.
+			// However, with drifty tracking systems (e.g. IMUs) the concept of "torso" is hazy.
+			// Really it's just a mechanism to turn the view without moving the head - its absolute
+			// orientation is not that useful.
+			// So... if the mouse is to the right greater than the chosen angle from the view, and then
+			// moves more right, it will drag the torso (and thus the view) right, so it stays on the edge of the view.
+			// But if it moves left towards the view, it does no dragging.
+			// Note that if the mouse does not move, but the view moves, it will NOT drag at all.
+			// This allows people to mouse-aim within their view, but also to flick-turn with the mouse,
+			// and to flick-glance with the head.
+			if ( fReticleYawLimit >= 0.0f )
+			{
+				float fViewToWeaponYaw = AngleDiff ( curAngles[YAW], m_PlayerViewAngle[YAW] );
+				float fWeaponYawMovement = AngleDiff ( curAngles[YAW], oldAngles[YAW] );
+				if ( fViewToWeaponYaw > fReticleYawLimit )
+				{
+					if ( fWeaponYawMovement > 0.0f )
+					{
+						m_PlayerTorsoAngle[YAW] += fWeaponYawMovement;
+					}
+				}
+				else if ( fViewToWeaponYaw < -fReticleYawLimit )
+				{
+					if ( fWeaponYawMovement < 0.0f )
+					{
+						m_PlayerTorsoAngle[YAW] += fWeaponYawMovement;
+					}
+				}
+			}
+
+			// Let every other system know.
+			AngleMatrix( *pNewAngles, const_cast<matrix3x4_t&>(m_WorldFromWeapon.As3x4()) );
+			AngleMatrix( m_PlayerTorsoAngle, const_cast<matrix3x4_t&>(worldFromTorso.As3x4()) );
+			// Restore the translation.
+			m_WorldFromWeapon.SetTranslation ( vWeaponOrigin );
+		}
+		break;
+	case HMM_SHOOTMOUSE_MOVEFACE:
+		{
+			(*pNewAngles)[PITCH] = clamp( (*pNewAngles)[PITCH], m_PlayerViewAngle[PITCH]-15.f, m_PlayerViewAngle[PITCH]+15.f );
+
+			float fDiff = AngleDiff( (*pNewAngles)[YAW], m_PlayerViewAngle[YAW] );
+
+			if( fDiff > 15.f )
+			{
+				(*pNewAngles)[YAW] = AngleNormalize( m_PlayerViewAngle[YAW] + 15.f );
+				if( !m_bOverrideTorsoAngle )
+					m_PlayerTorsoAngle[ YAW ] += fDiff - 15.f;
+			}
+			else if( fDiff < -15.f )
+			{
+				(*pNewAngles)[YAW] = AngleNormalize( m_PlayerViewAngle[YAW] - 15.f );
+				if( !m_bOverrideTorsoAngle )
+					m_PlayerTorsoAngle[ YAW ] += fDiff + 15.f;
+			}
+			else
+			{
+				m_PlayerTorsoAngle[ YAW ] += AngleDiff( curAngles[YAW], oldAngles[YAW] ) /2.f;
+			}
+
+			AngleMatrix( *pNewAngles, const_cast<matrix3x4_t&>(m_WorldFromWeapon.As3x4()) );
+			AngleMatrix( m_PlayerTorsoAngle, const_cast<matrix3x4_t&>(worldFromTorso.As3x4()) );
+			// Restore the translation.
+			m_WorldFromWeapon.SetTranslation ( vWeaponOrigin );
+		}
+		break;
+	default: Assert ( false ); break;
+	}
+
+	// Figure out player motion.
+	switch ( m_hmmMovementActual )
+	{
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEFACE:
+		{
+			// The motion passed in is meant to be relative to the face, so jimmy it to be relative to the new weapon aim.
+			VMatrix mideyeFromWorld = m_WorldFromMidEye.InverseTR();
+			VMatrix newMidEyeFromWeapon = mideyeFromWorld * m_WorldFromWeapon;
+			newMidEyeFromWeapon.SetTranslation ( Vector ( 0.0f, 0.0f, 0.0f ) );
+			*pNewMotion = newMidEyeFromWeapon * curMotion;
+		}
+		break;
+	case HMM_SHOOTFACE_MOVETORSO:
+		{
+			// The motion passed in is meant to be relative to the torso, so jimmy it to be relative to the new weapon aim.
+			VMatrix torsoFromWorld = worldFromTorso.InverseTR();
+			VMatrix newTorsoFromWeapon = torsoFromWorld * m_WorldFromWeapon;
+			newTorsoFromWeapon.SetTranslation ( Vector ( 0.0f, 0.0f, 0.0f ) );
+			*pNewMotion = newTorsoFromWeapon * curMotion;
+		}
+		break;
+	case HMM_SHOOTBOUNDEDMOUSE_LOOKFACE_MOVEMOUSE:
+	case HMM_SHOOTMOVELOOKMOUSEFACE:
+	case HMM_SHOOTFACE_MOVEFACE:
+	case HMM_SHOOTMOUSE_MOVEFACE:
+	case HMM_SHOOTMOVEMOUSE_LOOKFACE:
+	case HMM_SHOOTMOVELOOKMOUSE:
+		// Motion is meant to be relative to the weapon, so we're fine.
+		*pNewMotion = curMotion;
+		break;
+	default: Assert ( false ); break;
+	}
+
+	// If the game told us to, recenter the torso yaw to match the weapon
+	if ( m_iAlignTorsoAndViewToWeaponCountdown > 0 )
+	{
+		m_iAlignTorsoAndViewToWeaponCountdown--;
+
+		// figure out the angles from the torso to the head
+		QAngle torsoFromHeadAngles;
+		MatrixAngles( m_TorsoFromMideye.As3x4(), torsoFromHeadAngles );
+
+		QAngle weaponAngles;
+		MatrixAngles( m_WorldFromWeapon.As3x4(), weaponAngles );
+		m_PlayerTorsoAngle[ YAW ] = weaponAngles[ YAW ] - torsoFromHeadAngles[ YAW ] ;
+		NormalizeAngles( m_PlayerTorsoAngle );
+	}
+
+	// remember the motion for stat tracking
+	m_PlayerLastMovement = *pNewMotion;
+
+	return true;
 }
 
-void CHeadTrack::OverrideWeaponHudAimVectors(Vector*, Vector*) {
+bool CHeadTrack::OverrideWeaponHudAimVectors(Vector* pAimOrigin, Vector* pAimDirection)
+{
 	DebugMsg("CHeadTrack::OverrideWeaponHudAimVectors\n");
+	if (!m_bActive || !pAimOrigin || !pAimDirection)
+		return false;
+
+	*pAimOrigin = m_WorldFromWeapon.GetTranslation();
+	*pAimDirection = m_WorldFromWeapon.GetForward();
+	return true;
 }
 
-void CHeadTrack::OverrideZNearFar(float*, float*) {
+void CHeadTrack::OverrideZNearFar(float* pZNear, float* pZFar)
+{
 	DebugMsg("CHeadTrack::OverrideZNearFar\n");
 }
 
-void CHeadTrack::OverrideTorsoTransform(const Vector&, const QAngle&) {
+void CHeadTrack::OverrideTorsoTransform(const Vector& position, const QAngle& angles)
+{
 	DebugMsg("CHeadTrack::OverrideTorsoTransform\n");
+	m_bOverrideTorsoAngle = true;
+	m_OverrideTorsoAngle = angles;
+	m_OverrideTorsoAngle[PITCH] = 0;
+	m_OverrideTorsoAngle[ROLL] = 0;
+	NormalizeAngles(m_OverrideTorsoAngle);
+	m_PlayerTorsoAngle = m_OverrideTorsoAngle;
 }
 
-void CHeadTrack::CancelTorsoTransformOverride() {
+void CHeadTrack::CancelTorsoTransformOverride()
+{
 	DebugMsg("CHeadTrack::CancelTorsoTransformOverride\n");
 
 	m_bOverrideTorsoAngle = false;
 }
 
-void CHeadTrack::GetTorsoRelativeAim(Vector*, QAngle*) {
+void CHeadTrack::GetTorsoRelativeAim(Vector* pPosition, QAngle* pAngles)
+{
 	DebugMsg("CHeadTrack::GetTorsoRelativeAim\n");
+	if (!pPosition || !pAngles)
+		return;
+
+	MatrixAngles(m_TorsoFromMideye.As3x4(), *pAngles, *pPosition);
+	pAngles->y += vr_aim_yaw_offset.GetFloat();
 }
 
-void CHeadTrack::GetWorldFromMidEye() {
+VMatrix CHeadTrack::GetWorldFromMidEye()
+{
 	DebugMsg("CHeadTrack::GetWorldFromMidEye\n");
+	return m_WorldFromMidEyeNoDebugCam;
 }
 
-void CHeadTrack::GetZoomedModeMagnification() {
+float CHeadTrack::GetZoomedModeMagnification()
+{
 	DebugMsg("CHeadTrack::GetZoomedModeMagnification\n");
+	return m_WorldZoomScale * vr_zoom_scope_scale.GetFloat();
 }
 
-void CHeadTrack::GetCurrentEyeViewport(int&, int&, int&, int&) {
+void CHeadTrack::GetCurrentEyeViewport(int& x, int& y, int& w, int& h)
+{
 	DebugMsg("CHeadTrack::GetCurrentEyeViewport\n");
+	x = y = 0;
+	w = h = 0;
 }
 
-void CHeadTrack::SetCurrentStereoEye(StereoEye_t) {
+void CHeadTrack::SetCurrentStereoEye(StereoEye_t eEye)
+{
 	DebugMsg("CHeadTrack::SetCurrentStereoEye\n");
 }
 
-void CHeadTrack::DoDistortionProcessing(const vrect_t*) {
+bool CHeadTrack::DoDistortionProcessing(const vrect_t *SrcRect)
+{
 	DebugMsg("CHeadTrack::DoDistortionProcessing\n");
+	if (!m_bActive || !m_pTracker)
+        return false;
+
+	float predictionSecs = 0.0f;
+	m_pTracker->SampleTrackingState(m_fPlayerGameFov, predictionSecs);
+
+	// ToDo: Render the VR output
+
+	return false;
 }
 
 void CDistortionTextureRegen::RegenerateTextureBits([[maybe_unused]] ITexture *pTexture, IVTFTexture *pVTFTexture, [[maybe_unused]] Rect_t *pSubRect)
@@ -371,34 +1091,36 @@ void CDistortionTextureRegen::RegenerateTextureBits([[maybe_unused]] ITexture *p
 	}
 }
 
-void CHeadTrack::AlignTorsoAndViewToWeapon() {
+void CHeadTrack::AlignTorsoAndViewToWeapon()
+{
 	DebugMsg("CHeadTrack::AlignTorsoAndViewToWeapon\n");
 }
 
-void CHeadTrack::OverrideViewModelTransform(Vector&, QAngle&, bool) {
-	DebugMsg("CHeadTrack::OverrideViewModelTransform\n");
-}
-
-bool CHeadTrack::ShouldRenderHUDInWorld() {
+bool CHeadTrack::ShouldRenderHUDInWorld()
+{
 	DebugMsg("CHeadTrack::ShouldRenderHUDInWorld\n");
 	return false;
 }
 
-float CHeadTrack::GetHUDDistance() {
+float CHeadTrack::GetHUDDistance()
+{
 	DebugMsg("CHeadTrack::GetHUDDistance\n");
 	return 100.0f;
 }
 
-bool CHeadTrack::ShouldRenderStereoHUD() {
+bool CHeadTrack::ShouldRenderStereoHUD()
+{
 	DebugMsg("CHeadTrack::ShouldRenderStereoHUD\n");
 	return false;
 }
 
-void CHeadTrack::RefreshCameraTexture() {
+void CHeadTrack::RefreshCameraTexture()
+{
 	DebugMsg("CHeadTrack::RefreshCameraTexture\n");
 }
 
-bool CHeadTrack::IsCameraTextureAvailable() {
+bool CHeadTrack::IsCameraTextureAvailable()
+{
 	DebugMsg("CHeadTrack::IsCameraTextureAvailable\n");
 	return false; // Always return's false? "xor eax, eax"
 }
@@ -422,7 +1144,7 @@ void CHeadTrack::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *pUR, Vector
 	else
 	{
 		
-		CBasePlayer* pPlayer = C_BasePlayer::GetLocalPlayer();
+		/*C_BasePlayer* pPlayer = C_BasePlayer::GetLocalPlayer();
 		if ( pPlayer != NULL )
 		{
 			C_BaseCombatWeapon *pWeapon = pPlayer->GetActiveWeapon();
@@ -435,7 +1157,8 @@ void CHeadTrack::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *pUR, Vector
 					vm->GetAttachment( iAttachment, vmOrigin, vmAngles);
 					
 					VMatrix worldFromPanel;
-					AngleMatrix(vmAngles, worldFromPanel.As3x4());
+					matrix3x4_t matrix = worldFromPanel.As3x4();
+					AngleMatrix(vmAngles, matrix);
 					MatrixRotate(worldFromPanel, Vector(1, 0, 0), -90.f);
 					worldFromPanel.GetBasisVectors(hudForward, hudRight, hudUp);
 					
@@ -447,7 +1170,7 @@ void CHeadTrack::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *pUR, Vector
 					vHalfHeight = hudUp  *  height/2.f; 
 				}
 			}
-		}		
+		}*/	
 		
 		vHUDOrigin = vmOrigin + hudRight*-5 + hudForward + hudUp*-1 + vHalfWidth; 
 	}
@@ -462,7 +1185,8 @@ void CHeadTrack::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *pUR, Vector
 // --------------------------------------------------------------------
 // Purpose: Renders the HUD in the world.
 // --------------------------------------------------------------------
-void CHeadTrack::RenderHUDQuad(bool bBlackout, bool bTranslucent) {
+void CHeadTrack::RenderHUDQuad(bool bBlackout, bool bTranslucent)
+{
 	DebugMsg("CHeadTrack::RenderHUDQuad\n");
 
 		Vector vHead, vUL, vUR, vLL, vLR;
@@ -475,12 +1199,6 @@ void CHeadTrack::RenderHUDQuad(bool bBlackout, bool bTranslucent) {
 		if ( bTranslucent )
 		{
 			mymat = materials->FindMaterial( "vgui/inworldui", TEXTURE_GROUP_VGUI );
-
-			// this is mounted on the left side of the gun in game, so allow the alpha to be modulated for nice fade in effect...
-			VMatrix mWeap(m_WorldFromWeapon);
-			g_MotionTracker()->overrideWeaponMatrix(mWeap);
-			float alpha = g_MotionTracker()->getHudPanelAlpha(mWeap.GetLeft(), m_WorldFromMidEye.GetForward(), 2.5);
-			mymat->AlphaModulate(alpha);
 		}
 		else
 		{
@@ -595,7 +1313,8 @@ const VMatrix& CHeadTrack::GetHudProjectionFromWorld() {
 	return m_HudProjectionFromWorld;
 }
 
-bool CHeadTrack::CollectSessionStartStats(KeyValues* pkvStats) {
+bool CHeadTrack::CollectSessionStartStats(KeyValues* pkvStats)
+{
 	DebugMsg("CHeadTrack::CollectSessionStartStats\n");
 
 	pkvStats->SetName( "TF2VRSessionDetails" );
@@ -637,7 +1356,8 @@ bool CHeadTrack::CollectSessionStartStats(KeyValues* pkvStats) {
 	return true;
 }
 
-bool CHeadTrack::CollectPeriodicStats(KeyValues* pkvStats) {
+bool CHeadTrack::CollectPeriodicStats(KeyValues* pkvStats)
+{
 	DebugMsg("CHeadTrack::CollectPeriodicStats\n");
 
 	// maybe we haven't even been called to get tracking data
@@ -708,11 +1428,12 @@ float Interpolate ( float fIn, float fInStart, float fInEnd, float fOutStart, fl
 	return fOut;
 }
 
-void CHeadTrack::RecalcEyeCalibration(TEyeCalibration* p) {
+void CHeadTrack::RecalcEyeCalibration(TEyeCalibration* p)
+{
 	DebugMsg("CHeadTrack::RecalcEyeCalibration\n");
 
 	int iDisplayWidth, iDisplayHeight;
-	bool bSuccess = g_pSourceVR->GetWindowSize( &iDisplayWidth, &iDisplayHeight );
+	bool bSuccess = m_pTracker->GetWindowBounds(nullptr, nullptr, nullptr, nullptr, &iDisplayWidth, &iDisplayHeight );
 	Assert ( bSuccess );
 	if ( bSuccess )
 	{
@@ -751,7 +1472,8 @@ void CHeadTrack::RecalcEyeCalibration(TEyeCalibration* p) {
 	}
 }
 
-void CHeadTrack::GetCurrentEyeCalibration(TEyeCalibration* p) {
+void CHeadTrack::GetCurrentEyeCalibration(TEyeCalibration* p)
+{
 	DebugMsg("CHeadTrack::GetCurrentEyeCalibration\n");
 
 	p->Left.iTop  = vr_ipdtest_left_t.GetInt();
@@ -766,12 +1488,12 @@ void CHeadTrack::GetCurrentEyeCalibration(TEyeCalibration* p) {
 	m_IpdTestCurrent = *p;
 }
 
-void CHeadTrack::SetCurrentEyeCalibration(TEyeCalibration const& p) {
+void CHeadTrack::SetCurrentEyeCalibration(TEyeCalibration const& p)
+{
 	DebugMsg("CHeadTrack::SetCurrentEyeCalibration\n");
 
 	m_IpdTestCurrent = p;
 	RecalcEyeCalibration( &m_IpdTestCurrent );
-	g_pSourceVR->SetUserIPDMM( m_IpdTestCurrent.fIpdInches * 25.4f );
 	vr_ipdtest_left_t.SetValue  ( m_IpdTestCurrent.Left.iTop  );
 	vr_ipdtest_left_b.SetValue  ( m_IpdTestCurrent.Left.iBot  );
 	vr_ipdtest_left_i.SetValue  ( m_IpdTestCurrent.Left.iIn   );
@@ -795,7 +1517,8 @@ void CHeadTrack::SetCurrentEyeCalibration(TEyeCalibration const& p) {
 #endif
 }
 
-void CHeadTrack::SetEyeCalibrationDisplayMisc(int iEditingNum, bool bVisible) {
+void CHeadTrack::SetEyeCalibrationDisplayMisc(int iEditingNum, bool bVisible)
+{
 	DebugMsg("CHeadTrack::SetEyeCalibrationDisplayMisc\n");
 
 	if( bVisible && !m_bIpdTestEnabled )
@@ -808,14 +1531,63 @@ void CHeadTrack::SetEyeCalibrationDisplayMisc(int iEditingNum, bool bVisible) {
 	m_bIpdTestEnabled = bVisible;
 }
 
+bool CHeadTrack::ReinitTracker()
+{
+	if (m_pTracker) {
+		m_pTracker->Shutdown();
+		delete m_pTracker;
+		m_pTracker = nullptr;
+	}
+
+	m_pTracker = CreateTracker();
+	if (!m_pTracker)
+		return false;
+
+	if (!m_pTracker->BInit())
+	{
+		m_pTracker->Shutdown();
+		delete m_pTracker;
+		m_pTracker = nullptr;
+		Warning("Failed to initialize VR tracker.\n");
+		return false;
+	}
+
+	if (!m_pTracker->BPostInit())
+	{
+		m_pTracker->Shutdown();
+		delete m_pTracker;
+		m_pTracker = nullptr;
+		Warning("Failed to post-init VR tracker.\n");
+		return false;
+	}
+
+	return true;
+}
+
 ITracker* CHeadTrack::CreateTracker()
 {
 	CTracker_Oculus* pTracker = new CTracker_Oculus;
 	if (!pTracker->BPreInit())
+	{
+		delete pTracker;
 		Error("Unable to pre-init VR tracker. Are all the cables on your HMD connected?");
+		return nullptr;
+	}
+
+	return pTracker;
 }
 
-static VMatrix OpenVRToSourceCoordinateSystem(const VMatrix& vortex)
+bool CHeadTrack::InitHMD()
+{
+	return true;
+}
+
+bool CHeadTrack::CurrentlyZoomed()
+{
+	return (m_WorldZoomScale != 1.0f);
+}
+
+VMatrix OpenVRToSourceCoordinateSystem(const VMatrix& vortex)
 {
 	const float inchesPerMeter = (float)(39.3700787);
 
@@ -850,22 +1622,132 @@ static VMatrix OpenVRToSourceCoordinateSystem(const VMatrix& vortex)
 	return result;
 }
 
-//static VMatrix VMatrixFrom44(const float v[4][4])
-//{
-//	return VMatrix(
-//		v[0][0], v[0][1], v[0][2], v[0][3],
-//		v[1][0], v[1][1], v[1][2], v[1][3],
-//		v[2][0], v[2][1], v[2][2], v[2][3],
-//		v[3][0], v[3][1], v[3][2], v[3][3]);
-//}
+VMatrix VMatrixFrom44(const float v[4][4])
+{
+	return VMatrix(
+		v[0][0], v[0][1], v[0][2], v[0][3],
+		v[1][0], v[1][1], v[1][2], v[1][3],
+		v[2][0], v[2][1], v[2][2], v[2][3],
+		v[3][0], v[3][1], v[3][2], v[3][3]);
+}
 
-static VMatrix VMatrixFrom34(const float v[3][4])
+VMatrix VMatrixFrom34(const float v[3][4])
 {
 	return VMatrix(
 		v[0][0], v[0][1], v[0][2], v[0][3],
 		v[1][0], v[1][1], v[1][2], v[1][3],
 		v[2][0], v[2][1], v[2][2], v[2][3],
 		0,       0,       0,       1       );
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Convert angles to -180 t 180 range
+// Input  : angles - 
+//-----------------------------------------------------------------------------
+// Originally defined in game/client/cdll_util.cpp but we don't need that entire file, just this one function.
+void NormalizeAngles( QAngle& angles )
+{
+	int i;
+	
+	// Normalize angles to -180 to 180 range
+	for ( i = 0; i < 3; i++ )
+	{
+		if ( angles[i] > 180.0 )
+		{
+			angles[i] -= 360.0;
+		}
+		else if ( angles[i] < -180.0 )
+		{
+			angles[i] += 360.0;
+		}
+	}
+}
+
+// --------------------------------------------------------------------
+// Purpose: Computes the FOV from the projection matrix
+// --------------------------------------------------------------------
+void CalcFovFromProjection ( float *pFov, const VMatrix &proj )
+{
+	// The projection matrices should be of the form:
+	// p0  0   z1 p1 
+	// 0   p2  z2 p3
+	// 0   0   z3 1
+	// (p0 = X fov, p1 = X offset, p2 = Y fov, p3 = Y offset )
+	// TODO: cope with more complex projection matrices?
+	float xscale  = proj.m[0][0];
+	Assert ( proj.m[0][1] == 0.0f );
+	float xoffset = proj.m[0][2];
+	Assert ( proj.m[0][3] == 0.0f );
+	Assert ( proj.m[1][0] == 0.0f );
+	float yscale  = proj.m[1][1];
+	float yoffset = proj.m[1][2];
+	Assert ( proj.m[1][3] == 0.0f );
+	// Row 2 determines Z-buffer values - don't care about those for now.
+	Assert ( proj.m[3][0] == 0.0f );
+	Assert ( proj.m[3][1] == 0.0f );
+	Assert ( proj.m[3][2] == -1.0f );
+	Assert ( proj.m[3][3] == 0.0f );
+
+	// The math here:
+	// A view-space vector (x,y,z,1) is transformed by the projection matrix
+	// / xscale   0     xoffset  0 \
+	// |    0   yscale  yoffset  0 |
+	// |    ?     ?        ?     ? |
+	// \    0     0       -1     0 /
+	//
+	// Then the result is normalized (i.e. divide by w) and the result clipped to the [-1,+1] unit cube.
+	// (ignore Z for now, and the clipping is slightly different).
+	// So, we want to know what vectors produce a clip value of -1 and +1 in each direction, e.g. in the X direction:
+	//    +-1 = ( xscale*x + xoffset*z ) / (-1*z)
+	//        = xscale*(x/z) + xoffset            (I flipped the signs of both sides)
+	// => (+-1 - xoffset)/xscale = x/z
+	// ...and x/z is tan(theta), and theta is the half-FOV.
+
+	float fov_px = 2.0f * RAD2DEG ( atanf ( fabsf ( (  1.0f - xoffset ) / xscale ) ) );
+	float fov_nx = 2.0f * RAD2DEG ( atanf ( fabsf ( ( -1.0f - xoffset ) / xscale ) ) );
+	float fov_py = 2.0f * RAD2DEG ( atanf ( fabsf ( (  1.0f - yoffset ) / yscale ) ) );
+	float fov_ny = 2.0f * RAD2DEG ( atanf ( fabsf ( ( -1.0f - yoffset ) / yscale ) ) );
+
+	*pFov = Max ( Max ( fov_px, fov_nx ), Max ( fov_py, fov_ny ) );
+	// FIXME: hey you know, I could do the Max() series before I call all those expensive atanf()s...
+}
+
+// --------------------------------------------------------------------
+// Purpose: Returns true if the matrix is orthonormal
+// --------------------------------------------------------------------
+bool IsOrthonormal ( VMatrix Mat, float fTolerance )
+{
+	float LenFwd = Mat.GetForward().Length();
+	float LenUp = Mat.GetUp().Length();
+	float LenLeft = Mat.GetLeft().Length();
+	float DotFwdUp = Mat.GetForward().Dot ( Mat.GetUp() );
+	float DotUpLeft = Mat.GetUp().Dot ( Mat.GetLeft() );
+	float DotLeftFwd = Mat.GetLeft().Dot ( Mat.GetForward() );
+	if ( fabsf ( LenFwd - 1.0f ) > fTolerance )
+	{
+		return false;
+	}
+	if ( fabsf ( LenUp - 1.0f ) > fTolerance )
+	{
+		return false;
+	}
+	if ( fabsf ( LenLeft - 1.0f ) > fTolerance )
+	{
+		return false;
+	}
+	if ( fabsf ( DotFwdUp ) > fTolerance )
+	{
+		return false;
+	}
+	if ( fabsf ( DotUpLeft ) > fTolerance )
+	{
+		return false;
+	}
+	if ( fabsf ( DotLeftFwd ) > fTolerance )
+	{
+		return false;
+	}
+	return true;
 }
 
 EXPOSE_SINGLE_INTERFACE_GLOBALVAR(CHeadTrack, IHeadTrack, HEADTRACK_INTERFACE_VERSION, g_HeadTrack);
